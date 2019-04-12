@@ -1,5 +1,0 @@
-/Users/matthewriley/cis566/cis566_finalproj/build/CMakeFiles/main_exec.dir
-/Users/matthewriley/cis566/cis566_finalproj/build/CMakeFiles/rebuild_cache.dir
-/Users/matthewriley/cis566/cis566_finalproj/build/CMakeFiles/edit_cache.dir
-/Users/matthewriley/cis566/cis566_finalproj/build/CMakeFiles/main_lib.dir
-/Users/matthewriley/cis566/cis566_finalproj/build/CMakeFiles/imgui.dir
