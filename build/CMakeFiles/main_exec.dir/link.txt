@@ -1,0 +1,1 @@
+/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++  -std=c++0x -g -Wl,-search_paths_first -Wl,-headerpad_max_install_names  CMakeFiles/main_exec.dir/src/main.cpp.o  -o main_exec libmain_lib.a /usr/local/lib/libglfw.3.2.dylib libimgui.a 
