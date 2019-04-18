@@ -14,13 +14,14 @@
 #include <array>
 #include <vector>
 #include <sstream>
+#include <fstream>
+#include "shaders/test_shaders.h"
 
 using namespace std;
 
 void handle_segfault(int sig_num) {
   array<void*, 15> frames{};
   int num_frames = backtrace(frames.data(), frames.size());
-  // TODO - is the stdout required?
   fprintf(stdout, "SEGFAULT to stdout");
   fprintf(stderr, "SEGFAULT signal: %d\n", sig_num);
   backtrace_symbols_fd(frames.data(), num_frames, STDERR_FILENO);
@@ -29,6 +30,117 @@ void handle_segfault(int sig_num) {
 
 void glfw_error_callback(int error_code, const char* error_msg) {
   printf("GLFW error: %d, %s", error_code, error_msg);
+}
+
+struct GraphicsState {
+  GLuint vao;
+  GLuint program;
+};
+
+void log_opengl_info() {
+  const GLubyte* vendor = glGetString(GL_VENDOR);
+  const GLubyte* renderer = glGetString(GL_RENDERER);
+  const GLubyte* version = glGetString(GL_VERSION);
+  const GLubyte* glsl_version = glGetString(GL_SHADING_LANGUAGE_VERSION);
+  printf("vendor: %s\nrenderer: %s\nversion: %s\nglsl version: %s\n",
+      vendor, renderer, version, glsl_version);  
+}
+
+void log_gl_errors() {
+  GLenum error_code = glGetError();
+  if (error_code == GL_NO_ERROR) {
+    return;
+  }
+  switch (error_code) {
+  case GL_INVALID_ENUM:
+    printf("INVALID_ENUM");
+    break;
+  case GL_INVALID_VALUE:
+    printf("INVALID_VALUE");
+    break;
+  case GL_INVALID_OPERATION:
+    printf("INVALID_OPERATION");
+    break;
+  case GL_INVALID_FRAMEBUFFER_OPERATION:
+    printf("GL_INVALID_FRAMEBUFFER_OPERATION");
+    break;
+  case GL_OUT_OF_MEMORY:
+    printf("GL_OUT_OF_MEMORY");
+    break;
+  default:
+    printf("unknown error code");
+    break;
+  };
+  printf("\n");
+}
+
+void log_program_info_logs(string msg, GLuint program) {
+  GLint log_len = 0;
+  glGetProgramiv(program, GL_INFO_LOG_LENGTH, &log_len);
+  if (log_len > 0) {
+    vector<GLchar> buffer(log_len);
+    GLsizei len_written = 0;
+    glGetProgramInfoLog(program, buffer.size(), &len_written, buffer.data());
+    printf("%s:\n%s\n", msg.data(), buffer.data());
+  }
+}
+
+void log_shader_info_logs(string msg, GLuint shader) {
+  GLint log_len = 0;
+  glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &log_len);
+  if (log_len > 0) {
+    vector<GLchar> buffer(log_len);
+    GLsizei len_written = 0;
+    glGetShaderInfoLog(shader, buffer.size(), &len_written, buffer.data());
+    printf("%s:\n%s\n", msg.data(), buffer.data());
+  }
+}
+
+// TODO - unused
+vector<GLchar> shader_source(string filename) {
+  ifstream stream(filename);
+  stringstream buffer;
+  buffer << stream.rdbuf();
+  string s = buffer.str();
+  return vector<GLchar>(s.begin(), s.end());
+}
+
+void setup_programs(GraphicsState& state) {
+  GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
+  glShaderSource(vertex_shader, 1, &TEST_VERTEX_SRC, nullptr);
+  glCompileShader(vertex_shader);
+
+  GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
+  glShaderSource(fragment_shader, 1, &TEST_FRAGMENT_SRC, nullptr);
+  glCompileShader(fragment_shader);
+
+  state.program = glCreateProgram();
+  glAttachShader(state.program, vertex_shader);
+  glAttachShader(state.program, fragment_shader);
+  glLinkProgram(state.program);
+  glValidateProgram(state.program);
+
+  log_shader_info_logs("vertex shader", vertex_shader);
+  log_shader_info_logs("fragment shader", fragment_shader);
+  log_program_info_logs("program log", state.program);
+
+  glDeleteShader(vertex_shader);
+  glDeleteShader(fragment_shader);
+
+  log_gl_errors();
+}
+
+void setup_opengl(GraphicsState& state) {
+  log_opengl_info();
+  
+  glGenVertexArrays(1, &state.vao);
+  glBindVertexArray(state.vao);
+
+  setup_programs(state);
+
+  glEnable(GL_DEPTH_TEST);
+
+  log_gl_errors();
 }
 
 void run_app() {
@@ -57,6 +169,9 @@ void run_app() {
   glfwSwapInterval(1);
 
   printf("OpenGL: %d.%d\n", GLVersion.major, GLVersion.minor);
+
+  GraphicsState g_state;
+  setup_opengl(g_state);
 
   // setup imgui
   IMGUI_CHECKVERSION();
