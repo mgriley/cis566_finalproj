@@ -15,9 +15,42 @@
 #include <vector>
 #include <sstream>
 #include <fstream>
-#include "shaders/test_shaders.h"
+#include "shaders/render_shaders.h"
+
+#define GLM_ENABLE_EXPERIMENTAL
+#include "glm/glm.hpp"
+#include "glm/gtc/matrix_transform.hpp"
 
 using namespace std;
+using namespace glm;
+
+struct Vertex {
+  vec3 pos;
+  vec3 nor;
+  vec4 col;
+};
+
+struct RenderState {
+  GLuint prog;
+
+  int fb_width, fb_height;
+
+  GLuint vbo;
+  GLuint index_buffer;
+
+  GLuint unif_mv_matrix;
+  GLuint unif_proj_matrix;
+  GLuint pos_attrib;
+  GLuint nor_attrib;
+  GLuint col_attrib;
+};
+
+struct GraphicsState {
+  GLuint vao;
+
+  RenderState render_state;
+};
+
 
 void handle_segfault(int sig_num) {
   array<void*, 15> frames{};
@@ -31,11 +64,6 @@ void handle_segfault(int sig_num) {
 void glfw_error_callback(int error_code, const char* error_msg) {
   printf("GLFW error: %d, %s", error_code, error_msg);
 }
-
-struct GraphicsState {
-  GLuint vao;
-  GLuint program;
-};
 
 void log_opengl_info() {
   const GLubyte* vendor = glGetString(GL_VENDOR);
@@ -105,29 +133,80 @@ vector<GLchar> shader_source(string filename) {
   return vector<GLchar>(s.begin(), s.end());
 }
 
-void setup_programs(GraphicsState& state) {
+GLuint setup_program(string prog_name,
+    const GLchar* vertex_src, const GLchar* frag_src) {
   GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
-  glShaderSource(vertex_shader, 1, &TEST_VERTEX_SRC, nullptr);
+  glShaderSource(vertex_shader, 1, &vertex_src, nullptr);
   glCompileShader(vertex_shader);
 
   GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
-  glShaderSource(fragment_shader, 1, &TEST_FRAGMENT_SRC, nullptr);
+  glShaderSource(fragment_shader, 1, &frag_src, nullptr);
   glCompileShader(fragment_shader);
 
-  state.program = glCreateProgram();
-  glAttachShader(state.program, vertex_shader);
-  glAttachShader(state.program, fragment_shader);
-  glLinkProgram(state.program);
-  glValidateProgram(state.program);
+  GLuint program = glCreateProgram();
+  glAttachShader(program, vertex_shader);
+  glAttachShader(program, fragment_shader);
+  glLinkProgram(program);
+  glValidateProgram(program);
 
-  log_shader_info_logs("vertex shader", vertex_shader);
-  log_shader_info_logs("fragment shader", fragment_shader);
-  log_program_info_logs("program log", state.program);
+  log_shader_info_logs(prog_name + ", vertex shader", vertex_shader);
+  log_shader_info_logs(prog_name + ", fragment shader", fragment_shader);
+  log_program_info_logs(prog_name + ", program log", program);
 
   glDeleteShader(vertex_shader);
   glDeleteShader(fragment_shader);
 
   log_gl_errors();
+
+  return program;
+}
+
+// Size in bytes of the respective buffers
+// TODO - check these later
+const GLsizeiptr RENDER_VBO_SIZE = (GLsizeiptr) 1e8;
+const GLsizeiptr RENDER_INDEX_BUFFER_SIZE = (GLsizeiptr) 1e8;
+
+void configure_render_program(GraphicsState& g_state) {
+  RenderState& r_state = g_state.render_state;
+  
+  glGenBuffers(1, &r_state.vbo);
+  glBindBuffer(GL_ARRAY_BUFFER, r_state.vbo);
+  // TODO - check this later (may not want static draw)
+  glBufferData(GL_ARRAY_BUFFER, RENDER_VBO_SIZE, nullptr, GL_STATIC_DRAW);
+  
+  glGenBuffers(1, &r_state.index_buffer);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
+  // TODO - check this later (may not ant static draw)
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, RENDER_INDEX_BUFFER_SIZE, nullptr, GL_STATIC_DRAW);
+
+  r_state.prog = setup_program(
+      "render program", RENDER_VERTEX_SRC, RENDER_FRAGMENT_SRC);
+  r_state.unif_mv_matrix = glGetUniformLocation(
+      r_state.prog, "mv_matrix");
+  r_state.unif_proj_matrix = glGetUniformLocation(
+      r_state.prog, "proj_matrix");
+  assert(r_state.unif_mv_matrix != -1);
+  assert(r_state.unif_proj_matrix != -1);
+
+  // interleave the attributes within the single VBO
+
+  r_state.pos_attrib = glGetAttribLocation(r_state.prog, "vs_pos");
+  r_state.nor_attrib = glGetAttribLocation(r_state.prog, "vs_nor");
+  r_state.col_attrib = glGetAttribLocation(r_state.prog, "vs_col");
+  assert(r_state.pos_attrib != -1);
+  assert(r_state.nor_attrib != -1);
+  assert(r_state.col_attrib != -1);
+
+  glVertexAttribPointer(r_state.pos_attrib, 3, GL_FLOAT, GL_FALSE,
+      sizeof(Vertex), (void*) offsetof(Vertex, pos));
+  glVertexAttribPointer(r_state.nor_attrib, 3, GL_FLOAT, GL_FALSE,
+      sizeof(Vertex), (void*) offsetof(Vertex, nor));
+  glVertexAttribPointer(r_state.col_attrib, 4, GL_FLOAT, GL_FALSE,
+      sizeof(Vertex), (void*) offsetof(Vertex, col));
+
+  glEnableVertexAttribArray(r_state.pos_attrib);
+  glEnableVertexAttribArray(r_state.nor_attrib);
+  glEnableVertexAttribArray(r_state.col_attrib);
 }
 
 void setup_opengl(GraphicsState& state) {
@@ -136,10 +215,41 @@ void setup_opengl(GraphicsState& state) {
   glGenVertexArrays(1, &state.vao);
   glBindVertexArray(state.vao);
 
-  setup_programs(state);
+  configure_render_program(state);
 
   glEnable(GL_DEPTH_TEST);
 
+  log_gl_errors();
+}
+
+void render_frame(GraphicsState& g_state) {
+  RenderState& r_state = g_state.render_state;
+  glUseProgram(r_state.prog);
+
+  // set uniforms
+  float aspect_ratio = r_state.fb_width / (float) r_state.fb_height;
+  vec3 eye(10.0,10.0,-10.0);
+  vec3 center(0.0);
+  vec3 up(0.0,1.0,0.0);
+  mat4 mv_matrix = glm::lookAt(eye, center, up);
+  mat4 proj_matrix = glm::perspective((float) M_PI / 4.0f, aspect_ratio, 1.0f, 10000.0f);
+  glUniformMatrix4fv(r_state.unif_mv_matrix, 1, 0, &mv_matrix[0][0]);
+  glUniformMatrix4fv(r_state.unif_proj_matrix, 1, 0, &proj_matrix[0][0]);
+
+  // set buffers
+  // TODO - this is sample data
+  vector<Vertex> vertices = {
+    {vec3(0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)},
+    {vec3(1.0,0.0,0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)},
+    {vec3(1.0,1.0,0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)}
+  };
+  vector<GLuint> indices = {
+    0, 1, 2
+  };
+  glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(Vertex), vertices.data());
+  glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, indices.size() * sizeof(GLuint), indices.data());
+
+  glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr);
   log_gl_errors();
 }
 
@@ -227,12 +337,17 @@ void run_app() {
     int fb_width = 0;
     int fb_height = 0;
     glfwGetFramebufferSize(window, &fb_width, &fb_height);
+    
     glViewport(0, 0, fb_width, fb_height);
     glClearColor(1, 1, 1, 1);
+    glClearDepth(1.0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-    // TODO - render all else
+    // TODO - render a frame
+    g_state.render_state.fb_width = fb_width;
+    g_state.render_state.fb_height = fb_height;
+    render_frame(g_state);
     
     glfwSwapBuffers(window);
   }
