@@ -24,6 +24,7 @@
 using namespace std;
 using namespace glm;
 
+// For use in the interleaved buffer
 struct Vertex {
   vec3 pos;
   vec3 nor;
@@ -40,6 +41,7 @@ struct RenderState {
 
   GLuint unif_mv_matrix;
   GLuint unif_proj_matrix;
+
   GLuint pos_attrib;
   GLuint nor_attrib;
   GLuint col_attrib;
@@ -124,15 +126,6 @@ void log_shader_info_logs(string msg, GLuint shader) {
   }
 }
 
-// TODO - unused
-vector<GLchar> shader_source(string filename) {
-  ifstream stream(filename);
-  stringstream buffer;
-  buffer << stream.rdbuf();
-  string s = buffer.str();
-  return vector<GLchar>(s.begin(), s.end());
-}
-
 GLuint setup_program(string prog_name,
     const GLchar* vertex_src, const GLchar* frag_src) {
   GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
@@ -176,7 +169,7 @@ void configure_render_program(GraphicsState& g_state) {
   
   glGenBuffers(1, &r_state.index_buffer);
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
-  // TODO - check this later (may not ant static draw)
+  // TODO - check this later (may not want static draw)
   glBufferData(GL_ELEMENT_ARRAY_BUFFER, RENDER_INDEX_BUFFER_SIZE, nullptr, GL_STATIC_DRAW);
 
   r_state.prog = setup_program(
@@ -228,7 +221,7 @@ void render_frame(GraphicsState& g_state) {
 
   // set uniforms
   float aspect_ratio = r_state.fb_width / (float) r_state.fb_height;
-  vec3 eye(10.0,10.0,-10.0);
+  vec3 eye(0.0,0.0,-10.0);
   vec3 center(0.0);
   vec3 up(0.0,1.0,0.0);
   mat4 mv_matrix = glm::lookAt(eye, center, up);
@@ -344,7 +337,6 @@ void run_app() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-    // TODO - render a frame
     g_state.render_state.fb_width = fb_width;
     g_state.render_state.fb_height = fb_height;
     render_frame(g_state);
