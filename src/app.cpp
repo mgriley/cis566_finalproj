@@ -21,11 +21,12 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "glm/glm.hpp"
 #include "glm/gtc/matrix_transform.hpp"
+#include "glm/gtx/string_cast.hpp"
 
 using namespace std;
 using namespace glm;
 
-// For use in the interleaved buffer
+// For use in the interleaved render buffer
 struct Vertex {
   vec3 pos;
   vec3 nor;
@@ -40,6 +41,7 @@ struct RenderState {
 
   GLuint vbo;
   GLuint index_buffer;
+  int elem_count;
 
   GLuint unif_mv_matrix;
   GLuint unif_proj_matrix;
@@ -49,6 +51,7 @@ struct RenderState {
   GLuint col_attrib;
 };
 
+// For use in the interleaved transform feedback buffer
 struct MorphNode {
   vec3 pos;
 };
@@ -281,21 +284,38 @@ void generate_render_data(GraphicsState& g_state) {
   glBindVertexArray(target_buf.vao);
   glBindBuffer(GL_ARRAY_BUFFER, target_buf.vbo);
 
+  // read Node data from GPU
   vector<MorphNode> nodes{(size_t) m_state.num_nodes};
   glGetBufferSubData(GL_ARRAY_BUFFER, 0, m_state.num_nodes * sizeof(MorphNode), nodes.data());
   
   for (MorphNode& node : nodes) {
-    printf("node pos x: %f\n", node.pos.x);
+    printf("node pos: %s\n", to_string(node.pos).c_str());
   }
+
+  // write Node data to render buffers
+  // TODO - set the index buffer and an element count
+
+  RenderState& r_state = g_state.render_state;
+  vector<Vertex> vertices{nodes.size()};
+  for (int i = 0; i < vertices.size(); ++i) {
+    Vertex& vertex = vertices[i];
+    MorphNode& node = nodes[i];
+
+    vertex.pos = node.pos;
+    vertex.nor = vec3(0.0,1.0,0.0);
+    vertex.col = vec4(0.0,1.0,0.0,1.0);
+  }
+  glBindBuffer(GL_ARRAY_BUFFER, r_state.vbo);
+  glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(Vertex), vertices.data());
 }
 
 void set_initial_sim_data(GraphicsState& g_state) {
   MorphBuffer& m_buf = g_state.morph_state.buffers[0];
 
   vector<MorphNode> nodes = {
-    {vec3(1.0)},
-    {vec3(2.0)},
-    {vec3(3.0)}
+    {vec3(0.0)},
+    {vec3(1.0,0.0,0.0)},
+    {vec3(0.0,1.0,0.0)}
   };
   glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbo);
   glBufferSubData(GL_ARRAY_BUFFER, 0, nodes.size() * sizeof(MorphNode), nodes.data());
@@ -327,7 +347,7 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
   glDisable(GL_RASTERIZER_DISCARD);
 }
 
-int set_sample_render_data(RenderState& r_state) {
+void set_sample_render_data(RenderState& r_state) {
   vector<Vertex> vertices = {
     {vec3(0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)},
     {vec3(1.0,0.0,0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)},
@@ -340,7 +360,7 @@ int set_sample_render_data(RenderState& r_state) {
   glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(Vertex), vertices.data());
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
   glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, indices.size() * sizeof(GLuint), indices.data());
-  return indices.size();
+  r_state.elem_count = indices.size();
 }
 
 void render_frame(GraphicsState& g_state) {
@@ -358,12 +378,12 @@ void render_frame(GraphicsState& g_state) {
   glUniformMatrix4fv(r_state.unif_proj_matrix, 1, 0, &proj_matrix[0][0]);
 
   glBindVertexArray(r_state.vao);
-  //int elem_count = set_sample_render_data(r_state);
+  //set_sample_render_data(r_state);
 
   glPointSize(10.0f);
   glDrawArrays(GL_POINTS, 0, 3);
   
-  //glDrawElements(GL_TRIANGLES, elem_count, GL_UNSIGNED_INT, nullptr);
+  //glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
 
   log_gl_errors("done render_frame");
 }
