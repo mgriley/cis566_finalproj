@@ -13,6 +13,7 @@
 #include <thread>
 #include <array>
 #include <vector>
+#include <unordered_map>
 #include <sstream>
 #include <fstream>
 #include "shaders/render_shaders.h"
@@ -25,6 +26,12 @@
 
 using namespace std;
 using namespace glm;
+
+string vec3_str(vec3 v) {
+  char s[100];
+  sprintf(s, "[%.2f, %.2f, %.2f]", v[0], v[1], v[2]);
+  return string(s);
+}
 
 struct Camera {
   mat4 cam_to_world;
@@ -69,9 +76,39 @@ struct RenderState {
 };
 
 // For use in the interleaved transform feedback buffer
-struct MorphNode {
-  vec3 pos;
+enum MorphNodeType {
+  TYPE_VERTEX = 0,
+  TYPE_FACE
 };
+
+struct MorphNode {
+  int node_type;
+  vec3 pos;
+  ivec4 neighbors;
+  ivec4 faces;
+
+  MorphNode();
+};
+
+MorphNode::MorphNode():
+  node_type(TYPE_VERTEX),
+  pos(0.0),
+  neighbors(-1),
+  faces(-1)
+{
+}
+
+string node_str(MorphNode const& node) {
+  array<char, 200> s;
+  if (node.node_type == TYPE_VERTEX) {
+    sprintf(s.data(), "VERT pos: %s, neighbors: %s, faces: %s",
+        vec3_str(node.pos).c_str(), to_string(node.neighbors).c_str(),
+        to_string(node.faces).c_str());
+  } else {
+    sprintf(s.data(), "FACE verts: %s", to_string(node.neighbors).c_str());
+  }
+  return string(s.data());
+}
 
 struct MorphBuffer {
   GLuint vao;
@@ -82,7 +119,14 @@ struct MorphBuffer {
 struct MorphState {
   GLuint prog;
   array<MorphBuffer, 2> buffers;
+  // set to the index of the buffer that holds
+  // the most recent simulation result
+  int result_buffer_index;
+
+  GLuint node_type_attrib;
   GLuint pos_attrib;
+  GLuint neighbors_attrib;
+  GLuint faces_attrib;
 
   // the number of nodes used in the most recent sim
   int num_nodes;
@@ -184,7 +228,12 @@ GLuint setup_program(string prog_name,
   glAttachShader(program, fragment_shader);
 
   if (is_morph_prog) {
-    vector<const char*> varyings = {"out_pos"};
+    vector<const char*> varyings = {
+      "out_node_type",
+      "out_pos",
+      "out_neighbors",
+      "out_faces"
+    };
     glTransformFeedbackVaryings(program, varyings.size(),
         varyings.data(), GL_INTERLEAVED_ATTRIBS);
   }
@@ -256,7 +305,7 @@ void configure_render_program(GraphicsState& g_state) {
 
 // TODO - check this later.
 // The maximum # of morph nodes
-const int NUM_MORPH_NODES = 10;//(int) (1e8 / (float) sizeof(MorphNode));
+const int MAX_NUM_MORPH_NODES = 10;//(int) (1e8 / (float) sizeof(MorphNode));
 
 void configure_morph_program(GraphicsState& g_state) {
   MorphState& m_state = g_state.morph_state;
@@ -264,8 +313,15 @@ void configure_morph_program(GraphicsState& g_state) {
   m_state.prog = setup_program(
       "morph program", MORPH_VERTEX_SRC, MORPH_FRAGMENT_SRC, true);
   
+  m_state.node_type_attrib = glGetAttribLocation(m_state.prog, "node_type");
   m_state.pos_attrib = glGetAttribLocation(m_state.prog, "pos");
-  assert(m_state.pos_attrib != -1);
+  m_state.neighbors_attrib = glGetAttribLocation(m_state.prog, "neighbors");
+  m_state.faces_attrib = glGetAttribLocation(m_state.prog, "faces");
+  vector<GLuint> all_attribs = {m_state.node_type_attrib, m_state.pos_attrib,
+    m_state.neighbors_attrib, m_state.faces_attrib};
+  for (GLuint attrib : all_attribs) {
+    assert(attrib != -1);
+  }
 
   for (MorphBuffer& m_buf : m_state.buffers) {
     glGenVertexArrays(1, &m_buf.vao);
@@ -273,11 +329,22 @@ void configure_morph_program(GraphicsState& g_state) {
 
     glGenBuffers(1, &m_buf.vbo);
     glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbo);
-    glBufferData(GL_ARRAY_BUFFER, NUM_MORPH_NODES * sizeof(MorphNode), nullptr, GL_DYNAMIC_COPY);
+    glBufferData(GL_ARRAY_BUFFER, MAX_NUM_MORPH_NODES * sizeof(MorphNode), nullptr, GL_DYNAMIC_COPY);
 
+    // setup attributes
+
+    glVertexAttribIPointer(m_state.node_type_attrib, 1, GL_INT,
+        sizeof(MorphNode), (void*) offsetof(MorphNode, node_type));
     glVertexAttribPointer(m_state.pos_attrib, 3, GL_FLOAT, GL_FALSE,
         sizeof(MorphNode), (void*) offsetof(MorphNode, pos));
-    glEnableVertexAttribArray(m_state.pos_attrib);
+    glVertexAttribIPointer(m_state.neighbors_attrib, 4, GL_INT,
+        sizeof(MorphNode), (void*) offsetof(MorphNode, neighbors));
+    glVertexAttribIPointer(m_state.faces_attrib, 4, GL_INT,
+        sizeof(MorphNode), (void*) offsetof(MorphNode, faces));
+
+    for (GLuint attrib : all_attribs) {
+      glEnableVertexAttribArray(attrib);
+    }
 
     glGenTextures(1, &m_buf.tex_buf);
     glBindTexture(GL_TEXTURE_BUFFER, m_buf.tex_buf);
@@ -297,7 +364,7 @@ void setup_opengl(GraphicsState& state) {
 // Use the simulation data to generate render data
 void generate_render_data(GraphicsState& g_state) {  
   MorphState& m_state = g_state.morph_state;
-  MorphBuffer& target_buf = m_state.buffers[0];
+  MorphBuffer& target_buf = m_state.buffers[m_state.result_buffer_index];
   glBindVertexArray(target_buf.vao);
   glBindBuffer(GL_ARRAY_BUFFER, target_buf.vbo);
 
@@ -305,35 +372,143 @@ void generate_render_data(GraphicsState& g_state) {
   vector<MorphNode> nodes{(size_t) m_state.num_nodes};
   glGetBufferSubData(GL_ARRAY_BUFFER, 0, m_state.num_nodes * sizeof(MorphNode), nodes.data());
   
-  for (MorphNode& node : nodes) {
-    printf("node pos: %s\n", to_string(node.pos).c_str());
+  // log nodes
+  printf("num nodes: %lu\n", nodes.size()); 
+  for (int i = 0; i < nodes.size(); ++i) {
+    MorphNode& node = nodes[i];
+    printf("%4d %s\n", i, node_str(node).c_str());
   }
 
   // write Node data to render buffers
-  // TODO - set the index buffer and an element count
+  
+  vector<Vertex> vertices;
+  vector<GLuint> indices;
+
+  // map from index in nodes vector to index in vertices vector
+  unordered_map<int, int> redirect_map;
+
+  for (int i = 0; i < nodes.size(); ++i) {
+    MorphNode& node = nodes[i];
+    if (node.node_type == TYPE_FACE) {
+      GLuint index_offset = vertices.size();
+      vector<MorphNode> face_nodes;
+      for (int j = 0; j < 4; ++j) {
+        int node_index = node.neighbors[j];
+        face_nodes.push_back(nodes[node_index]);
+      }
+      // TODO - calc the normal from 3 positions
+      vec3 nor(0.0,1.0,0.0);
+      for (auto& node : face_nodes) {
+        Vertex vertex;
+        vertex.pos = node.pos;
+        vertex.nor = nor;
+        vertex.col = vec4(0.0,1.0,0.0,1.0);
+        vertices.push_back(vertex);
+      }
+      // quad to 2 triangles
+      vector<GLuint> new_indices = {
+        index_offset, index_offset + 1, index_offset + 2,
+        index_offset, index_offset + 2, index_offset + 3
+      };
+      indices.insert(indices.end(),
+          new_indices.begin(), new_indices.end());
+    }
+  }
 
   RenderState& r_state = g_state.render_state;
-  vector<Vertex> vertices{nodes.size()};
-  for (int i = 0; i < vertices.size(); ++i) {
-    Vertex& vertex = vertices[i];
-    MorphNode& node = nodes[i];
-
-    vertex.pos = node.pos;
-    vertex.nor = vec3(0.0,1.0,0.0);
-    vertex.col = vec4(0.0,1.0,0.0,1.0);
-  }
   glBindBuffer(GL_ARRAY_BUFFER, r_state.vbo);
   glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(Vertex), vertices.data());
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
+  glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, indices.size() * sizeof(GLuint), indices.data());
+}
+
+vec3 gen_sphere(vec2 unit) {
+  float v_angle = unit[1] * M_PI;
+  float h_angle = unit[0] * 2.0 * M_PI;
+  return vec3(
+      sin(v_angle) * cos(h_angle),
+      sin(v_angle) * sin(h_angle),
+      cos(v_angle));
+}
+
+// coord to vertex index
+int coord_to_index(ivec2 coord, ivec2 samples) {
+  return (coord[0] % samples[0]) + samples[0] * (coord[1] % samples[1]);
+}
+
+vector<MorphNode> gen_morph_data() {
+  ivec2 samples(4, 4);
+  // TODO - can optimize may using a single vector of size 2*sx*sy
+  vector<MorphNode> vertex_nodes;
+  vector<MorphNode> face_nodes;
+  for (int y = 0; y < samples[1]; ++y) {
+    for (int x = 0; x < samples[0]; ++x) {
+      ivec2 coord(x, y);
+      vec3 pos = gen_sphere(vec2(coord) / vec2(samples - 1));
+
+      int upper_neighbor = coord_to_index(coord + ivec2(0, 1), samples);
+      int lower_neighbor = coord_to_index(coord + ivec2(0, -1), samples);
+      int right_neighbor = coord_to_index(coord + ivec2(1, 0), samples);
+      int left_neighbor = coord_to_index(coord + ivec2(-1, 0), samples);
+      ivec4 neighbors(upper_neighbor, lower_neighbor, right_neighbor, left_neighbor);
+
+      // the index of the face is the index of the vert at its top-right corner
+      int bot_left_face = coord_to_index(coord, samples);
+      int bot_right_face = coord_to_index(coord + ivec2(1, 0), samples);
+      int top_left_face = coord_to_index(coord + ivec2(0, 1), samples);
+      int top_right_face = coord_to_index(coord + ivec2(1, 1), samples);
+      // the order of the faces is such that face[i] is to the right of the
+      // edge directed from this vert to neighbor[i]
+      ivec4 faces(top_right_face, bot_left_face, bot_right_face, top_left_face);
+
+      MorphNode vert_node;
+      vert_node.node_type = TYPE_VERTEX;
+      vert_node.pos = pos;
+      vert_node.neighbors = neighbors;
+      vert_node.faces = faces;
+      vertex_nodes.push_back(vert_node);
+
+      // record the face quad
+      int patch_a = coord_to_index(coord - ivec2(1, 1), samples);
+      int patch_b = coord_to_index(coord - ivec2(0, 1), samples);
+      int patch_c = coord_to_index(coord - ivec2(1, 0), samples);
+      int patch_d = coord_to_index(coord, samples);
+      // we store the face's (quad's) verts in the neighbors vec.
+      // MorphNode is conceptually a union. The other fields are unused with face type
+      MorphNode face_node;
+      face_node.node_type = TYPE_FACE;
+      // use CCW winding order
+      face_node.neighbors = ivec4(patch_a, patch_b, patch_d, patch_c);
+      face_nodes.push_back(face_node);
+    }
+  }
+  // offset the face indices, since the full array will be [vert_nodes, face_nodes]
+  // the face node indices don't require adjustment
+  for (MorphNode& node : vertex_nodes) {
+    node.faces += vertex_nodes.size();
+  }
+  vertex_nodes.insert(vertex_nodes.end(), face_nodes.begin(), face_nodes.end());
+  return vertex_nodes;
+}
+
+vector<MorphNode> gen_sample_data() {
+  vector<MorphNode> nodes{3};
+  nodes[0].pos = vec3(0.0);
+  nodes[0].neighbors = ivec4(0, 1, 2, 3);
+  nodes[0].faces = ivec4(0, 1, 2, 3);
+  nodes[1].pos = vec3(1.0,0.0,0.0);
+  nodes[1].neighbors = ivec4(1);
+  nodes[2].pos = vec3(0.0,1.0,0.0);
+  return nodes;
 }
 
 void set_initial_sim_data(GraphicsState& g_state) {
   MorphBuffer& m_buf = g_state.morph_state.buffers[0];
 
-  vector<MorphNode> nodes = {
-    {vec3(0.0)},
-    {vec3(1.0,0.0,0.0)},
-    {vec3(0.0,1.0,0.0)}
-  };
+  // TODO
+  vector<MorphNode> nodes = gen_morph_data();
+  //vector<MorphNode> nodes = gen_sample_data();
+
   glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbo);
   glBufferSubData(GL_ARRAY_BUFFER, 0, nodes.size() * sizeof(MorphNode), nodes.data());
   g_state.morph_state.num_nodes = nodes.size();
@@ -346,9 +521,7 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
   glEnable(GL_RASTERIZER_DISCARD);
 
   // perform double-buffered iterations
-  // assume the initial data is in buffer 0, and make num_iters even
-  // so the result ends in buffer 0
-  num_iters += num_iters % 2;
+  // assume the initial data is in buffer 0
   for (int i = 0; i < num_iters; ++i) {
     MorphBuffer& cur_buf = m_state.buffers[i & 1];
     MorphBuffer& next_buf = m_state.buffers[(i + 1) & 1];
@@ -360,6 +533,8 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
     glDrawArrays(GL_POINTS, 0, m_state.num_nodes);
     glEndTransformFeedback();
   }
+  // store the index of the most recently written buffer
+  m_state.result_buffer_index = num_iters % 2;
 
   glDisable(GL_RASTERIZER_DISCARD);
 }
