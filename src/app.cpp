@@ -26,6 +26,23 @@
 using namespace std;
 using namespace glm;
 
+struct Camera {
+  mat4 cam_to_world;
+  Camera();
+};
+
+Camera::Camera() {
+  vec3 forward(0.0,0.0,1.0);
+  vec3 up(0.0,1.0,0.0);
+  vec3 right = cross(up, forward);
+  vec3 pos(0.0,0.0,-10.0);
+
+  cam_to_world[0] = vec4(right, 0.0);
+  cam_to_world[1] = vec4(up, 0.0);
+  cam_to_world[2] = vec4(forward, 0.0);
+  cam_to_world[3] = vec4(pos, 1.0);
+}
+
 // For use in the interleaved render buffer
 struct Vertex {
   vec3 pos;
@@ -72,10 +89,10 @@ struct MorphState {
 };
 
 struct GraphicsState {
+  Camera camera;
   RenderState render_state;
   MorphState morph_state;
 };
-
 
 void handle_segfault(int sig_num) {
   array<void*, 15> frames{};
@@ -369,10 +386,11 @@ void render_frame(GraphicsState& g_state) {
 
   // set uniforms
   float aspect_ratio = r_state.fb_width / (float) r_state.fb_height;
-  vec3 eye(0.0,0.0,-10.0);
-  vec3 center(0.0);
-  vec3 up(0.0,1.0,0.0);
-  mat4 mv_matrix = glm::lookAt(eye, center, up);
+  Camera& cam = g_state.camera;
+  vec3 eye = vec3(cam.cam_to_world[3]);
+  vec3 forward = vec3(cam.cam_to_world[2]);
+  vec3 up = vec3(cam.cam_to_world[1]);
+  mat4 mv_matrix = glm::lookAt(eye, eye + forward, up);
   mat4 proj_matrix = glm::perspective((float) M_PI / 4.0f, aspect_ratio, 1.0f, 10000.0f);
   glUniformMatrix4fv(r_state.unif_mv_matrix, 1, 0, &mv_matrix[0][0]);
   glUniformMatrix4fv(r_state.unif_proj_matrix, 1, 0, &proj_matrix[0][0]);
@@ -386,6 +404,50 @@ void render_frame(GraphicsState& g_state) {
   //glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
 
   log_gl_errors("done render_frame");
+}
+
+void handle_key_event(GLFWwindow* win, int key, int scancode,
+    int action, int mods) {
+  GraphicsState* g_state = static_cast<GraphicsState*>(glfwGetWindowUserPointer(win));
+  //printf("key event\n");
+}
+
+void update_camera(GLFWwindow* win, Camera& cam) {
+  vec3 delta(0.0);
+  if (glfwGetKey(win, GLFW_KEY_W)) {
+    delta += vec3(0.0,0.0,1.0);
+  }
+  if (glfwGetKey(win, GLFW_KEY_A)) {
+    delta += vec3(1.0,0.0,0.0);
+  }
+  if (glfwGetKey(win, GLFW_KEY_S)) {
+    delta += vec3(0.0,0.0,-1.0);
+  }
+  if (glfwGetKey(win, GLFW_KEY_D)) {
+    delta += vec3(-1.0,0.0,0.0);
+  }
+  if (glfwGetKey(win, GLFW_KEY_Q)) {
+    delta += vec3(0.0,-1.0,0.0);
+  }
+  if (glfwGetKey(win, GLFW_KEY_E)) {
+    delta += vec3(0.0,1.0,0.0);
+  }
+  vec3 trans = delta * 5.0f * 0.017f;
+  mat4 trans_mat = glm::translate(mat4(1.0), trans);
+
+  mat4 rot_mat(1.0);
+  float amt_degs = 0.017 * 2.0f;
+  if (glfwGetKey(win, GLFW_KEY_LEFT)) {
+    rot_mat = glm::rotate(mat4(1.0), amt_degs, vec3(0.0,1.0,0.0));
+  } else if (glfwGetKey(win, GLFW_KEY_RIGHT)) {
+    rot_mat = glm::rotate(mat4(1.0), -amt_degs, vec3(0.0,1.0,0.0));
+  } else if (glfwGetKey(win, GLFW_KEY_UP)) {
+    rot_mat = glm::rotate(mat4(1.0), amt_degs, vec3(1.0,0.0,0.0));
+  } else if (glfwGetKey(win, GLFW_KEY_DOWN)) {
+    rot_mat = glm::rotate(mat4(1.0), -amt_degs, vec3(1.0,0.0,0.0));
+  }
+  
+  cam.cam_to_world = cam.cam_to_world * rot_mat * trans_mat;
 }
 
 void run_app() {
@@ -417,6 +479,9 @@ void run_app() {
 
   GraphicsState g_state;
   setup_opengl(g_state);
+
+  glfwSetWindowUserPointer(window, &g_state);
+  glfwSetKeyCallback(window, handle_key_event);
 
   // setup imgui
   IMGUI_CHECKVERSION();
@@ -458,6 +523,7 @@ void run_app() {
     }
 
     glfwPollEvents();
+    update_camera(window, g_state.camera);
 
     // the screen appears black on mojave until a resize occurs
     if (requires_mac_mojave_fix) {
