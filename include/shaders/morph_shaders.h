@@ -7,7 +7,7 @@ in vec3 pos;
 out vec3 out_pos;
 
 void main() {
-  out_pos = pos;
+  out_pos = pos + vec3(1.0,0.0,0.0);
 }
 
 )--";

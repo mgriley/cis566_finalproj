@@ -61,10 +61,11 @@ struct MorphBuffer {
 
 struct MorphState {
   GLuint prog;
-
   array<MorphBuffer, 2> buffers;
-
   GLuint pos_attrib;
+
+  // the number of nodes used in the most recent sim
+  int num_nodes;
 };
 
 struct GraphicsState {
@@ -234,7 +235,8 @@ void configure_render_program(GraphicsState& g_state) {
 }
 
 // TODO - check this later.
-const int MORPH_NUM_NODES = (int) (1e8 / (float) sizeof(MorphNode));
+// The maximum # of morph nodes
+const int NUM_MORPH_NODES = 10;//(int) (1e8 / (float) sizeof(MorphNode));
 
 void configure_morph_program(GraphicsState& g_state) {
   MorphState& m_state = g_state.morph_state;
@@ -251,7 +253,7 @@ void configure_morph_program(GraphicsState& g_state) {
 
     glGenBuffers(1, &m_buf.vbo);
     glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbo);
-    glBufferData(GL_ARRAY_BUFFER, MORPH_NUM_NODES * sizeof(MorphNode), nullptr, GL_DYNAMIC_COPY);
+    glBufferData(GL_ARRAY_BUFFER, NUM_MORPH_NODES * sizeof(MorphNode), nullptr, GL_DYNAMIC_COPY);
 
     glVertexAttribPointer(m_state.pos_attrib, 3, GL_FLOAT, GL_FALSE,
         sizeof(MorphNode), (void*) offsetof(MorphNode, pos));
@@ -272,6 +274,34 @@ void setup_opengl(GraphicsState& state) {
   log_gl_errors("done setup_opengl");
 }
 
+// Use the simulation data to generate render data
+void generate_render_data(GraphicsState& g_state) {  
+  MorphState& m_state = g_state.morph_state;
+  MorphBuffer& target_buf = m_state.buffers[0];
+  glBindVertexArray(target_buf.vao);
+  glBindBuffer(GL_ARRAY_BUFFER, target_buf.vbo);
+
+  vector<MorphNode> nodes{(size_t) m_state.num_nodes};
+  glGetBufferSubData(GL_ARRAY_BUFFER, 0, m_state.num_nodes * sizeof(MorphNode), nodes.data());
+  
+  for (MorphNode& node : nodes) {
+    printf("node pos x: %f\n", node.pos.x);
+  }
+}
+
+void set_initial_sim_data(GraphicsState& g_state) {
+  MorphBuffer& m_buf = g_state.morph_state.buffers[0];
+
+  vector<MorphNode> nodes = {
+    {vec3(1.0)},
+    {vec3(2.0)},
+    {vec3(3.0)}
+  };
+  glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbo);
+  glBufferSubData(GL_ARRAY_BUFFER, 0, nodes.size() * sizeof(MorphNode), nodes.data());
+  g_state.morph_state.num_nodes = nodes.size();
+}
+
 void run_simulation(GraphicsState& g_state, int num_iters) {
   MorphState& m_state = g_state.morph_state;
 
@@ -279,6 +309,9 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
   glEnable(GL_RASTERIZER_DISCARD);
 
   // perform double-buffered iterations
+  // assume the initial data is in buffer 0, and make num_iters even
+  // so the result ends in buffer 0
+  num_iters += num_iters % 2;
   for (int i = 0; i < num_iters; ++i) {
     MorphBuffer& cur_buf = m_state.buffers[i & 1];
     MorphBuffer& next_buf = m_state.buffers[(i + 1) & 1];
@@ -287,11 +320,27 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
     glBindTexture(GL_TEXTURE_BUFFER, cur_buf.tex_buf);
     glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, next_buf.vbo);
     glBeginTransformFeedback(GL_POINTS);
-    glDrawArrays(GL_POINTS, 0, MORPH_NUM_NODES);
+    glDrawArrays(GL_POINTS, 0, m_state.num_nodes);
     glEndTransformFeedback();
   }
 
   glDisable(GL_RASTERIZER_DISCARD);
+}
+
+int set_sample_render_data(RenderState& r_state) {
+  vector<Vertex> vertices = {
+    {vec3(0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)},
+    {vec3(1.0,0.0,0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)},
+    {vec3(1.0,1.0,0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)}
+  };
+  vector<GLuint> indices = {
+    0, 1, 2
+  };
+  glBindBuffer(GL_ARRAY_BUFFER, r_state.vbo);
+  glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(Vertex), vertices.data());
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
+  glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, indices.size() * sizeof(GLuint), indices.data());
+  return indices.size();
 }
 
 void render_frame(GraphicsState& g_state) {
@@ -309,23 +358,13 @@ void render_frame(GraphicsState& g_state) {
   glUniformMatrix4fv(r_state.unif_proj_matrix, 1, 0, &proj_matrix[0][0]);
 
   glBindVertexArray(r_state.vao);
+  //int elem_count = set_sample_render_data(r_state);
 
-  // set buffers
-  // TODO - this is sample data
-  vector<Vertex> vertices = {
-    {vec3(0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)},
-    {vec3(1.0,0.0,0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)},
-    {vec3(1.0,1.0,0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)}
-  };
-  vector<GLuint> indices = {
-    0, 1, 2
-  };
-  glBindBuffer(GL_ARRAY_BUFFER, r_state.vbo);
-  glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(Vertex), vertices.data());
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
-  glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, indices.size() * sizeof(GLuint), indices.data());
+  glPointSize(10.0f);
+  glDrawArrays(GL_POINTS, 0, 3);
+  
+  //glDrawElements(GL_TRIANGLES, elem_count, GL_UNSIGNED_INT, nullptr);
 
-  glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr);
   log_gl_errors("done render_frame");
 }
 
@@ -365,6 +404,11 @@ void run_app() {
   ImGuiIO& io = ImGui::GetIO();
   ImGui::StyleColorsDark();
   //ImGui::StyleColorsClassic();
+
+  // TODO - make a simple UI for this
+  set_initial_sim_data(g_state);
+  run_simulation(g_state, 1);
+  generate_render_data(g_state);
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   const char* glsl_version = "#version 150";
