@@ -16,6 +16,7 @@
 #include <sstream>
 #include <fstream>
 #include "shaders/render_shaders.h"
+#include "shaders/morph_shaders.h"
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include "glm/glm.hpp"
@@ -32,6 +33,7 @@ struct Vertex {
 };
 
 struct RenderState {
+  GLuint vao;
   GLuint prog;
 
   int fb_width, fb_height;
@@ -47,10 +49,27 @@ struct RenderState {
   GLuint col_attrib;
 };
 
-struct GraphicsState {
-  GLuint vao;
+struct MorphNode {
+  vec3 pos;
+};
 
+struct MorphBuffer {
+  GLuint vao;
+  GLuint vbo;
+  GLuint tex_buf;
+};
+
+struct MorphState {
+  GLuint prog;
+
+  array<MorphBuffer, 2> buffers;
+
+  GLuint pos_attrib;
+};
+
+struct GraphicsState {
   RenderState render_state;
+  MorphState morph_state;
 };
 
 
@@ -76,32 +95,33 @@ void log_opengl_info() {
       vendor, renderer, version, glsl_version);  
 }
 
-void log_gl_errors() {
+void log_gl_errors(string msg) {
   GLenum error_code = glGetError();
   if (error_code == GL_NO_ERROR) {
     return;
   }
+  string error_name;
   switch (error_code) {
   case GL_INVALID_ENUM:
-    printf("INVALID_ENUM");
+    error_name = "INVALID_ENUM";
     break;
   case GL_INVALID_VALUE:
-    printf("INVALID_VALUE");
+    error_name = "INVALID_VALUE";
     break;
   case GL_INVALID_OPERATION:
-    printf("INVALID_OPERATION");
+    error_name = "INVALID_OPERATION";
     break;
   case GL_INVALID_FRAMEBUFFER_OPERATION:
-    printf("GL_INVALID_FRAMEBUFFER_OPERATION");
+    error_name = "GL_INVALID_FRAMEBUFFER_OPERATION";
     break;
   case GL_OUT_OF_MEMORY:
-    printf("GL_OUT_OF_MEMORY");
+    error_name = "GL_OUT_OF_MEMORY";
     break;
   default:
-    printf("unknown error code");
+    error_name = "unknown error code";
     break;
   };
-  printf("\n");
+  printf("%s: %s\n", msg.c_str(), error_name.c_str());
 }
 
 void log_program_info_logs(string msg, GLuint program) {
@@ -127,29 +147,35 @@ void log_shader_info_logs(string msg, GLuint shader) {
 }
 
 GLuint setup_program(string prog_name,
-    const GLchar* vertex_src, const GLchar* frag_src) {
+    const GLchar* vertex_src, const GLchar* frag_src, bool is_morph_prog) {
+  GLuint program = glCreateProgram();
+
   GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
   glShaderSource(vertex_shader, 1, &vertex_src, nullptr);
   glCompileShader(vertex_shader);
+  log_shader_info_logs(prog_name + ", vertex shader", vertex_shader);
+  glAttachShader(program, vertex_shader);
 
   GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
   glShaderSource(fragment_shader, 1, &frag_src, nullptr);
   glCompileShader(fragment_shader);
-
-  GLuint program = glCreateProgram();
-  glAttachShader(program, vertex_shader);
+  log_shader_info_logs(prog_name + ", fragment shader", fragment_shader);
   glAttachShader(program, fragment_shader);
+
+  if (is_morph_prog) {
+    vector<const char*> varyings = {"out_pos"};
+    glTransformFeedbackVaryings(program, varyings.size(),
+        varyings.data(), GL_INTERLEAVED_ATTRIBS);
+  }
+
   glLinkProgram(program);
   glValidateProgram(program);
-
-  log_shader_info_logs(prog_name + ", vertex shader", vertex_shader);
-  log_shader_info_logs(prog_name + ", fragment shader", fragment_shader);
   log_program_info_logs(prog_name + ", program log", program);
 
   glDeleteShader(vertex_shader);
   glDeleteShader(fragment_shader);
 
-  log_gl_errors();
+  log_gl_errors("setup program");
 
   return program;
 }
@@ -161,7 +187,12 @@ const GLsizeiptr RENDER_INDEX_BUFFER_SIZE = (GLsizeiptr) 1e8;
 
 void configure_render_program(GraphicsState& g_state) {
   RenderState& r_state = g_state.render_state;
-  
+
+  glEnable(GL_DEPTH_TEST);
+
+  glGenVertexArrays(1, &r_state.vao);
+  glBindVertexArray(r_state.vao);
+
   glGenBuffers(1, &r_state.vbo);
   glBindBuffer(GL_ARRAY_BUFFER, r_state.vbo);
   // TODO - check this later (may not want static draw)
@@ -173,7 +204,7 @@ void configure_render_program(GraphicsState& g_state) {
   glBufferData(GL_ELEMENT_ARRAY_BUFFER, RENDER_INDEX_BUFFER_SIZE, nullptr, GL_STATIC_DRAW);
 
   r_state.prog = setup_program(
-      "render program", RENDER_VERTEX_SRC, RENDER_FRAGMENT_SRC);
+      "render program", RENDER_VERTEX_SRC, RENDER_FRAGMENT_SRC, false);
   r_state.unif_mv_matrix = glGetUniformLocation(
       r_state.prog, "mv_matrix");
   r_state.unif_proj_matrix = glGetUniformLocation(
@@ -202,17 +233,65 @@ void configure_render_program(GraphicsState& g_state) {
   glEnableVertexAttribArray(r_state.col_attrib);
 }
 
+// TODO - check this later.
+const int MORPH_NUM_NODES = (int) (1e8 / (float) sizeof(MorphNode));
+
+void configure_morph_program(GraphicsState& g_state) {
+  MorphState& m_state = g_state.morph_state;
+
+  m_state.prog = setup_program(
+      "morph program", MORPH_VERTEX_SRC, MORPH_FRAGMENT_SRC, true);
+  
+  m_state.pos_attrib = glGetAttribLocation(m_state.prog, "pos");
+  assert(m_state.pos_attrib != -1);
+
+  for (MorphBuffer& m_buf : m_state.buffers) {
+    glGenVertexArrays(1, &m_buf.vao);
+    glBindVertexArray(m_buf.vao);
+
+    glGenBuffers(1, &m_buf.vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbo);
+    glBufferData(GL_ARRAY_BUFFER, MORPH_NUM_NODES * sizeof(MorphNode), nullptr, GL_DYNAMIC_COPY);
+
+    glVertexAttribPointer(m_state.pos_attrib, 3, GL_FLOAT, GL_FALSE,
+        sizeof(MorphNode), (void*) offsetof(MorphNode, pos));
+    glEnableVertexAttribArray(m_state.pos_attrib);
+
+    glGenTextures(1, &m_buf.tex_buf);
+    glBindTexture(GL_TEXTURE_BUFFER, m_buf.tex_buf);
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_R8, m_buf.vbo);
+  }
+}
+
 void setup_opengl(GraphicsState& state) {
   log_opengl_info();
   
-  glGenVertexArrays(1, &state.vao);
-  glBindVertexArray(state.vao);
-
   configure_render_program(state);
+  configure_morph_program(state);
 
-  glEnable(GL_DEPTH_TEST);
+  log_gl_errors("done setup_opengl");
+}
 
-  log_gl_errors();
+void run_simulation(GraphicsState& g_state, int num_iters) {
+  MorphState& m_state = g_state.morph_state;
+
+  glUseProgram(m_state.prog);
+  glEnable(GL_RASTERIZER_DISCARD);
+
+  // perform double-buffered iterations
+  for (int i = 0; i < num_iters; ++i) {
+    MorphBuffer& cur_buf = m_state.buffers[i & 1];
+    MorphBuffer& next_buf = m_state.buffers[(i + 1) & 1];
+
+    glBindVertexArray(cur_buf.vao);
+    glBindTexture(GL_TEXTURE_BUFFER, cur_buf.tex_buf);
+    glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, next_buf.vbo);
+    glBeginTransformFeedback(GL_POINTS);
+    glDrawArrays(GL_POINTS, 0, MORPH_NUM_NODES);
+    glEndTransformFeedback();
+  }
+
+  glDisable(GL_RASTERIZER_DISCARD);
 }
 
 void render_frame(GraphicsState& g_state) {
@@ -229,6 +308,8 @@ void render_frame(GraphicsState& g_state) {
   glUniformMatrix4fv(r_state.unif_mv_matrix, 1, 0, &mv_matrix[0][0]);
   glUniformMatrix4fv(r_state.unif_proj_matrix, 1, 0, &proj_matrix[0][0]);
 
+  glBindVertexArray(r_state.vao);
+
   // set buffers
   // TODO - this is sample data
   vector<Vertex> vertices = {
@@ -239,11 +320,13 @@ void render_frame(GraphicsState& g_state) {
   vector<GLuint> indices = {
     0, 1, 2
   };
+  glBindBuffer(GL_ARRAY_BUFFER, r_state.vbo);
   glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(Vertex), vertices.data());
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
   glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, indices.size() * sizeof(GLuint), indices.data());
 
   glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr);
-  log_gl_errors();
+  log_gl_errors("done render_frame");
 }
 
 void run_app() {
@@ -339,6 +422,7 @@ void run_app() {
 
     g_state.render_state.fb_width = fb_width;
     g_state.render_state.fb_height = fb_height;
+
     render_frame(g_state);
     
     glfwSwapBuffers(window);
