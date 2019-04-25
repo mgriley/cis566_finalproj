@@ -15,7 +15,7 @@ out ivec4 out_faces;
 
 void main() {
   out_node_type = node_type;
-  out_pos = pos + vec3(1.0,float(neighbors[1]),0.0);
+  out_pos = pos;// + vec3(1.0,float(neighbors[1]),0.0);
   out_neighbors = neighbors;
   out_faces = faces;
 }

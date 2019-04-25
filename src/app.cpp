@@ -28,9 +28,15 @@ using namespace std;
 using namespace glm;
 
 string vec3_str(vec3 v) {
-  char s[100];
-  sprintf(s, "[%.2f, %.2f, %.2f]", v[0], v[1], v[2]);
-  return string(s);
+  array<char, 100> s;
+  sprintf(s.data(), "[%5.2f, %5.2f, %5.2f]", v[0], v[1], v[2]);
+  return string(s.data());
+}
+
+string ivec4_str(ivec4 v) {
+  array<char, 100> s;
+  sprintf(s.data(), "[%4d, %4d, %4d, %4d]", v[0], v[1], v[2], v[3]); 
+  return string(s.data());
 }
 
 struct Camera {
@@ -66,6 +72,7 @@ struct RenderState {
   GLuint vbo;
   GLuint index_buffer;
   int elem_count;
+  int vertex_count;
 
   GLuint unif_mv_matrix;
   GLuint unif_proj_matrix;
@@ -102,10 +109,10 @@ string node_str(MorphNode const& node) {
   array<char, 200> s;
   if (node.node_type == TYPE_VERTEX) {
     sprintf(s.data(), "VERT pos: %s, neighbors: %s, faces: %s",
-        vec3_str(node.pos).c_str(), to_string(node.neighbors).c_str(),
-        to_string(node.faces).c_str());
+        vec3_str(node.pos).c_str(), ivec4_str(node.neighbors).c_str(),
+        ivec4_str(node.faces).c_str());
   } else {
-    sprintf(s.data(), "FACE verts: %s", to_string(node.neighbors).c_str());
+    sprintf(s.data(), "FACE verts: %s", ivec4_str(node.neighbors).c_str());
   }
   return string(s.data());
 }
@@ -303,9 +310,8 @@ void configure_render_program(GraphicsState& g_state) {
   glEnableVertexAttribArray(r_state.col_attrib);
 }
 
-// TODO - check this later.
 // The maximum # of morph nodes
-const int MAX_NUM_MORPH_NODES = 10;//(int) (1e8 / (float) sizeof(MorphNode));
+const int MORPH_NODE_VBO_SIZE = (int) 1e8;
 
 void configure_morph_program(GraphicsState& g_state) {
   MorphState& m_state = g_state.morph_state;
@@ -329,7 +335,7 @@ void configure_morph_program(GraphicsState& g_state) {
 
     glGenBuffers(1, &m_buf.vbo);
     glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbo);
-    glBufferData(GL_ARRAY_BUFFER, MAX_NUM_MORPH_NODES * sizeof(MorphNode), nullptr, GL_DYNAMIC_COPY);
+    glBufferData(GL_ARRAY_BUFFER, MORPH_NODE_VBO_SIZE, nullptr, GL_DYNAMIC_COPY);
 
     // setup attributes
 
@@ -373,19 +379,17 @@ void generate_render_data(GraphicsState& g_state) {
   glGetBufferSubData(GL_ARRAY_BUFFER, 0, m_state.num_nodes * sizeof(MorphNode), nodes.data());
   
   // log nodes
-  printf("num nodes: %lu\n", nodes.size()); 
+  printf("output nodes (%d):\n", m_state.num_nodes); 
   for (int i = 0; i < nodes.size(); ++i) {
     MorphNode& node = nodes[i];
     printf("%4d %s\n", i, node_str(node).c_str());
   }
+  printf("\n\n");
 
   // write Node data to render buffers
   
   vector<Vertex> vertices;
   vector<GLuint> indices;
-
-  // map from index in nodes vector to index in vertices vector
-  unordered_map<int, int> redirect_map;
 
   for (int i = 0; i < nodes.size(); ++i) {
     MorphNode& node = nodes[i];
@@ -415,11 +419,29 @@ void generate_render_data(GraphicsState& g_state) {
     }
   }
 
+  // log data
+  printf("vertex data (%lu):\n", vertices.size());
+  for (int i = 0; i < vertices.size(); ++i) {
+    Vertex& v = vertices[i];
+    printf("%4d %s\n", i, vec3_str(v.pos).c_str());
+  }
+  printf("\n\nindex data (%lu):\n", indices.size());
+  for (int i = 0; i < indices.size(); i += 3) {
+    ivec3 face(indices[i], indices[i + 1], indices[i + 2]);
+    printf("%4d %s\n", i, to_string(face).c_str());
+  }
+
   RenderState& r_state = g_state.render_state;
+  size_t vert_data_len = vertices.size() * sizeof(Vertex);
+  size_t index_data_len = indices.size() * sizeof(GLuint);
+  assert(vert_data_len <= RENDER_VBO_SIZE);
+  assert(index_data_len <= RENDER_INDEX_BUFFER_SIZE);
   glBindBuffer(GL_ARRAY_BUFFER, r_state.vbo);
-  glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(Vertex), vertices.data());
+  glBufferSubData(GL_ARRAY_BUFFER, 0, vert_data_len, vertices.data());
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
-  glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, indices.size() * sizeof(GLuint), indices.data());
+  glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, index_data_len, indices.data());
+  r_state.vertex_count = vertices.size();
+  r_state.elem_count = indices.size();
 }
 
 vec3 gen_sphere(vec2 unit) {
@@ -431,9 +453,19 @@ vec3 gen_sphere(vec2 unit) {
       cos(v_angle));
 }
 
+vec3 gen_square(vec2 unit) {
+  return vec3(unit, 0);
+}
+
+// Modulo but wraps -ve values to the +ve range, giving a positive result
+// Copied from: https://stackoverflow.com/questions/14997165/fastest-way-to-get-a-positive-modulo-in-c-c
+inline int pos_mod(int i, int n) {
+  return (i % n + n) % n;
+}
+
 // coord to vertex index
 int coord_to_index(ivec2 coord, ivec2 samples) {
-  return (coord[0] % samples[0]) + samples[0] * (coord[1] % samples[1]);
+  return pos_mod(coord[0], samples[0]) + samples[0] * pos_mod(coord[1], samples[1]);
 }
 
 vector<MorphNode> gen_morph_data() {
@@ -444,7 +476,7 @@ vector<MorphNode> gen_morph_data() {
   for (int y = 0; y < samples[1]; ++y) {
     for (int x = 0; x < samples[0]; ++x) {
       ivec2 coord(x, y);
-      vec3 pos = gen_sphere(vec2(coord) / vec2(samples - 1));
+      vec3 pos = gen_square(vec2(coord) / vec2(samples - 1));
 
       int upper_neighbor = coord_to_index(coord + ivec2(0, 1), samples);
       int lower_neighbor = coord_to_index(coord + ivec2(0, -1), samples);
@@ -503,15 +535,27 @@ vector<MorphNode> gen_sample_data() {
 }
 
 void set_initial_sim_data(GraphicsState& g_state) {
+  log_gl_errors("start set_initial_sim_data");
+
   MorphBuffer& m_buf = g_state.morph_state.buffers[0];
 
-  // TODO
   vector<MorphNode> nodes = gen_morph_data();
   //vector<MorphNode> nodes = gen_sample_data();
 
+  // log nodes
+  printf("generated nodes:\n");
+  for (int i = 0; i < nodes.size(); ++i) {
+    printf("%4d %s\n", i, node_str(nodes[i]).c_str());
+  }
+  printf("\n\n");
+
   glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbo);
-  glBufferSubData(GL_ARRAY_BUFFER, 0, nodes.size() * sizeof(MorphNode), nodes.data());
+  size_t node_data_len = nodes.size() * sizeof(MorphNode);
+  assert(node_data_len <= MORPH_NODE_VBO_SIZE);
+  glBufferSubData(GL_ARRAY_BUFFER, 0, node_data_len, nodes.data());
   g_state.morph_state.num_nodes = nodes.size();
+
+  log_gl_errors("done set_initial_sim_data");
 }
 
 void run_simulation(GraphicsState& g_state, int num_iters) {
@@ -537,6 +581,8 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
   m_state.result_buffer_index = num_iters % 2;
 
   glDisable(GL_RASTERIZER_DISCARD);
+
+  log_gl_errors("done simulation");
 }
 
 void set_sample_render_data(RenderState& r_state) {
@@ -552,6 +598,7 @@ void set_sample_render_data(RenderState& r_state) {
   glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(Vertex), vertices.data());
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
   glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, indices.size() * sizeof(GLuint), indices.data());
+  r_state.vertex_count = vertices.size();
   r_state.elem_count = indices.size();
 }
 
@@ -574,9 +621,18 @@ void render_frame(GraphicsState& g_state) {
   //set_sample_render_data(r_state);
 
   glPointSize(10.0f);
-  glDrawArrays(GL_POINTS, 0, 3);
-  
-  //glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
+
+  bool render_points = true;
+  bool render_wireframe = true;
+  if (render_wireframe) {
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+  } else {
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+  }
+  glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
+  if (render_points) {
+    glDrawArrays(GL_POINTS, 0, r_state.vertex_count);
+  }
 
   log_gl_errors("done render_frame");
 }
