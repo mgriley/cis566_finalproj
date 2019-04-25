@@ -76,6 +76,8 @@ struct RenderState {
 
   GLuint unif_mv_matrix;
   GLuint unif_proj_matrix;
+  GLuint unif_debug_render;
+  GLuint unif_debug_color;
 
   GLuint pos_attrib;
   GLuint nor_attrib;
@@ -143,7 +145,27 @@ struct GraphicsState {
   Camera camera;
   RenderState render_state;
   MorphState morph_state;
+
+  // debugging controls:
+  bool render_faces;
+  bool render_points;
+  bool render_wireframe;
+  bool log_input_nodes;
+  bool log_output_nodes;
+  bool log_render_data;
+
+  GraphicsState();
 };
+
+GraphicsState::GraphicsState() :
+  render_faces(true),
+  render_points(true),
+  render_wireframe(false),
+  log_input_nodes(false),
+  log_output_nodes(false),
+  log_render_data(false)
+{
+}
 
 void handle_segfault(int sig_num) {
   array<void*, 15> frames{};
@@ -286,8 +308,14 @@ void configure_render_program(GraphicsState& g_state) {
       r_state.prog, "mv_matrix");
   r_state.unif_proj_matrix = glGetUniformLocation(
       r_state.prog, "proj_matrix");
+  r_state.unif_debug_render = glGetUniformLocation(
+      r_state.prog, "debug_render");
+  r_state.unif_debug_color = glGetUniformLocation(
+      r_state.prog, "debug_color");
   assert(r_state.unif_mv_matrix != -1);
   assert(r_state.unif_proj_matrix != -1);
+  assert(r_state.unif_debug_render != -1);
+  assert(r_state.unif_debug_color != -1);
 
   // interleave the attributes within the single VBO
 
@@ -378,13 +406,15 @@ void generate_render_data(GraphicsState& g_state) {
   vector<MorphNode> nodes{(size_t) m_state.num_nodes};
   glGetBufferSubData(GL_ARRAY_BUFFER, 0, m_state.num_nodes * sizeof(MorphNode), nodes.data());
   
-  // log nodes
-  printf("output nodes (%d):\n", m_state.num_nodes); 
-  for (int i = 0; i < nodes.size(); ++i) {
-    MorphNode& node = nodes[i];
-    printf("%4d %s\n", i, node_str(node).c_str());
+  if (g_state.log_output_nodes) {
+    // log nodes
+    printf("output nodes (%d):\n", m_state.num_nodes); 
+    for (int i = 0; i < nodes.size(); ++i) {
+      MorphNode& node = nodes[i];
+      printf("%4d %s\n", i, node_str(node).c_str());
+    }
+    printf("\n\n");
   }
-  printf("\n\n");
 
   // write Node data to render buffers
   
@@ -419,16 +449,18 @@ void generate_render_data(GraphicsState& g_state) {
     }
   }
 
-  // log data
-  printf("vertex data (%lu):\n", vertices.size());
-  for (int i = 0; i < vertices.size(); ++i) {
-    Vertex& v = vertices[i];
-    printf("%4d %s\n", i, vec3_str(v.pos).c_str());
-  }
-  printf("\n\nindex data (%lu):\n", indices.size());
-  for (int i = 0; i < indices.size(); i += 3) {
-    ivec3 face(indices[i], indices[i + 1], indices[i + 2]);
-    printf("%4d %s\n", i, to_string(face).c_str());
+  if (g_state.log_render_data) {
+    // log data
+    printf("vertex data (%lu):\n", vertices.size());
+    for (int i = 0; i < vertices.size(); ++i) {
+      Vertex& v = vertices[i];
+      printf("%4d %s\n", i, vec3_str(v.pos).c_str());
+    }
+    printf("\n\nindex data (%lu):\n", indices.size());
+    for (int i = 0; i < indices.size(); i += 3) {
+      ivec3 face(indices[i], indices[i + 1], indices[i + 2]);
+      printf("%4d %s\n", i, to_string(face).c_str());
+    }
   }
 
   RenderState& r_state = g_state.render_state;
@@ -469,14 +501,14 @@ int coord_to_index(ivec2 coord, ivec2 samples) {
 }
 
 vector<MorphNode> gen_morph_data() {
-  ivec2 samples(4, 4);
+  ivec2 samples(10, 10);
   // TODO - can optimize may using a single vector of size 2*sx*sy
   vector<MorphNode> vertex_nodes;
   vector<MorphNode> face_nodes;
   for (int y = 0; y < samples[1]; ++y) {
     for (int x = 0; x < samples[0]; ++x) {
       ivec2 coord(x, y);
-      vec3 pos = gen_square(vec2(coord) / vec2(samples - 1));
+      vec3 pos = gen_sphere(vec2(coord) / vec2(samples - 1));
 
       int upper_neighbor = coord_to_index(coord + ivec2(0, 1), samples);
       int lower_neighbor = coord_to_index(coord + ivec2(0, -1), samples);
@@ -543,11 +575,13 @@ void set_initial_sim_data(GraphicsState& g_state) {
   //vector<MorphNode> nodes = gen_sample_data();
 
   // log nodes
-  printf("generated nodes:\n");
-  for (int i = 0; i < nodes.size(); ++i) {
-    printf("%4d %s\n", i, node_str(nodes[i]).c_str());
+  if (g_state.log_input_nodes) {
+    printf("input nodes:\n");
+    for (int i = 0; i < nodes.size(); ++i) {
+      printf("%4d %s\n", i, node_str(nodes[i]).c_str());
+    }
+    printf("\n\n");
   }
-  printf("\n\n");
 
   glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbo);
   size_t node_data_len = nodes.size() * sizeof(MorphNode);
@@ -622,15 +656,21 @@ void render_frame(GraphicsState& g_state) {
 
   glPointSize(10.0f);
 
-  bool render_points = true;
-  bool render_wireframe = true;
-  if (render_wireframe) {
+  if (g_state.render_faces) {
+    glUniform1i(r_state.unif_debug_render, 0);
+    glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
+  }
+  vec3 debug_col(1.0,0.0,0.0);
+  if (g_state.render_wireframe) {
+    glUniform1i(r_state.unif_debug_render, 1);
+    glUniform3fv(r_state.unif_debug_color, 1, &debug_col[0]);
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-  } else {
+    glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
   }
-  glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
-  if (render_points) {
+  if (g_state.render_points) {
+    glUniform1i(r_state.unif_debug_render, 1);
+    glUniform3fv(r_state.unif_debug_color, 1, &debug_col[0]);
     glDrawArrays(GL_POINTS, 0, r_state.vertex_count);
   }
 
@@ -768,6 +808,9 @@ void run_app() {
 
     ImGui::Begin("dev console", &show_dev_console);
     ImGui::Text("fps: %d", fps_stat);
+    ImGui::Checkbox("render faces", &g_state.render_faces);
+    ImGui::Checkbox("render points", &g_state.render_points);
+    ImGui::Checkbox("render wireframe", &g_state.render_wireframe);
     ImGui::End();
 
     ImGui::Render();

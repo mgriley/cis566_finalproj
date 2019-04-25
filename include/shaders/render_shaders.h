@@ -27,6 +27,9 @@ void main() {
 const char* RENDER_FRAGMENT_SRC = R"--(
 #version 410
 
+uniform bool debug_render;
+uniform vec3 debug_color;
+
 in vec4 fs_pos;
 in vec3 fs_nor;
 in vec4 fs_col;
@@ -37,6 +40,8 @@ void main() {
   vec3 light_dir = normalize(vec3(1,1,1));
   float df = clamp(dot(fs_nor.xyz, light_dir), 0.0, 1.0);
   vec3 col = df * fs_col.rgb;
+
+  col = debug_render ? debug_color : col;
 
   color = vec4(col, 1.0);  
 }
