@@ -13,10 +13,10 @@ in vec3 pos;
 in ivec4 neighbors;
 in ivec4 faces;
 
-uniform samplerBuffer node_type_buf;
+uniform isamplerBuffer node_type_buf;
 uniform samplerBuffer pos_buf;
-uniform samplerBuffer neighbors_buf;
-uniform samplerBuffer faces_buf;
+uniform isamplerBuffer neighbors_buf;
+uniform isamplerBuffer faces_buf;
 
 out int out_node_type;
 out vec3 out_pos;
@@ -24,17 +24,10 @@ out ivec4 out_neighbors;
 out ivec4 out_faces;
 
 void main() {
-  // TODO - left off here. Attempt to access read the individ faces
-  // from the texture buffer. If doesn't work, may need to 
-  // store the values in individual buffers.
-  //vec3 first_pos = texelFetch(node_buffer, 4);
-
-  /*
-  int some_type = texelFetch(node_type_buf, 0);
-  vec3 some_pos = texelFetch(pos_buf, 0);
-  ivec4 some_neighbors = texelFetch(neighbors_buf, 0);
-  ivec4 some_faces = texelFetch(faces_buf, 0);
-  */
+  //ivec4 coord = texelFetch(node_type_buf, 0);
+  //vec4 foo = texelFetch(pos_buf, 0);
+  //ivec4 bar = texelFetch(neighbors_buf, 0);
+  int baz = texelFetch(node_type_buf, 0).r;
 
   out_node_type = node_type;
   out_pos = pos + vec3(1.0,0.0,0.0);// + vec3(1.0,float(neighbors[1]),0.0);

@@ -213,31 +213,40 @@ struct MorphState {
   int num_nodes;
 };
 
+struct Controls {
+  // rendering
+  bool render_faces;
+  bool render_points;
+  bool render_wireframe;
+
+  // simulation
+  bool log_input_nodes;
+  bool log_output_nodes;
+  bool log_render_data;
+  int num_iters;
+
+  Controls();
+};
+
+Controls::Controls() :
+  render_faces(true),
+  render_points(true),
+  render_wireframe(false),
+  log_input_nodes(false),
+  log_output_nodes(false),
+  log_render_data(false),
+  num_iters(1)
+{
+}
+
 struct GraphicsState {
   Camera camera;
   RenderState render_state;
   MorphState morph_state;
 
-  // debugging controls:
-  bool render_faces;
-  bool render_points;
-  bool render_wireframe;
-  bool log_input_nodes;
-  bool log_output_nodes;
-  bool log_render_data;
-
-  GraphicsState();
+  // UI controls:
+  Controls controls;
 };
-
-GraphicsState::GraphicsState() :
-  render_faces(true),
-  render_points(true),
-  render_wireframe(false),
-  log_input_nodes(true),
-  log_output_nodes(true),
-  log_render_data(true)
-{
-}
 
 void handle_segfault(int sig_num) {
   array<void*, 15> frames{};
@@ -547,7 +556,7 @@ void generate_render_data(GraphicsState& g_state) {
 
   MorphNodes node_vecs = read_nodes_from_vbos(m_state);
     
-  if (g_state.log_output_nodes) {
+  if (g_state.controls.log_output_nodes) {
     // log nodes
     printf("output nodes (%d):\n", m_state.num_nodes); 
     for (int i = 0; i < node_vecs.node_type_vec.size(); ++i) {
@@ -557,7 +566,7 @@ void generate_render_data(GraphicsState& g_state) {
     printf("\n\n");
   }
 
-  // write Node data to render buffers
+  // conver the Node data to render data
   
   vector<Vertex> vertices;
   vector<GLuint> indices;
@@ -590,7 +599,7 @@ void generate_render_data(GraphicsState& g_state) {
     }
   }
 
-  if (g_state.log_render_data) {
+  if (g_state.controls.log_render_data) {
     // log data
     printf("vertex data (%lu):\n", vertices.size());
     for (int i = 0; i < vertices.size(); ++i) {
@@ -604,6 +613,7 @@ void generate_render_data(GraphicsState& g_state) {
     }
   }
 
+  // write the render data to render buffers
   RenderState& r_state = g_state.render_state;
   size_t vert_data_len = vertices.size() * sizeof(Vertex);
   size_t index_data_len = indices.size() * sizeof(GLuint);
@@ -716,7 +726,7 @@ void set_initial_sim_data(GraphicsState& g_state) {
   MorphNodes node_vecs(nodes);
 
   // log nodes
-  if (g_state.log_input_nodes) {
+  if (g_state.controls.log_input_nodes) {
     printf("input nodes:\n");
     for (int i = 0; i < node_vecs.node_type_vec.size(); ++i) {
       MorphNode node = node_vecs.node_at(i);
@@ -768,6 +778,14 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
   log_gl_errors("done simulation");
 }
 
+void run_simulation_pipeline(GraphicsState& g_state) {
+  log_gl_errors("starting generation\n");
+  set_initial_sim_data(g_state);
+  run_simulation(g_state, g_state.controls.num_iters);
+  generate_render_data(g_state);
+  log_gl_errors("finished generation\n");
+}
+
 void set_sample_render_data(RenderState& r_state) {
   vector<Vertex> vertices = {
     {vec3(0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)},
@@ -805,13 +823,13 @@ void render_frame(GraphicsState& g_state) {
   glBindVertexArray(r_state.vao);
   glPointSize(10.0f);
 
-  if (g_state.render_faces) {
+  if (g_state.controls.render_faces) {
     glUniform1i(r_state.unif_debug_render, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
     glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
   }
   vec3 debug_col(1.0,0.0,0.0);
-  if (g_state.render_wireframe) {
+  if (g_state.controls.render_wireframe) {
     glUniform1i(r_state.unif_debug_render, 1);
     glUniform3fv(r_state.unif_debug_color, 1, &debug_col[0]);
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
@@ -819,7 +837,7 @@ void render_frame(GraphicsState& g_state) {
     glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
   }
-  if (g_state.render_points) {
+  if (g_state.controls.render_points) {
     glUniform1i(r_state.unif_debug_render, 1);
     glUniform3fv(r_state.unif_debug_color, 1, &debug_col[0]);
     glDrawArrays(GL_POINTS, 0, r_state.vertex_count);
@@ -912,13 +930,6 @@ void run_app() {
   ImGui::StyleColorsDark();
   //ImGui::StyleColorsClassic();
 
-  // TODO - make a simple UI for this
-  log_gl_errors("starting generation\n");
-  set_initial_sim_data(g_state);
-  run_simulation(g_state, 1);
-  generate_render_data(g_state);
-  log_gl_errors("finished generation\n");
-
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   const char* glsl_version = "#version 150";
   ImGui_ImplOpenGL3_Init(glsl_version);
@@ -961,9 +972,24 @@ void run_app() {
 
     ImGui::Begin("dev console", &show_dev_console);
     ImGui::Text("fps: %d", fps_stat);
-    ImGui::Checkbox("render faces", &g_state.render_faces);
-    ImGui::Checkbox("render points", &g_state.render_points);
-    ImGui::Checkbox("render wireframe", &g_state.render_wireframe);
+
+    Controls& controls = g_state.controls;
+    ImGui::Separator();
+    ImGui::Text("render controls:");
+    ImGui::Checkbox("render faces", &controls.render_faces);
+    ImGui::Checkbox("render points", &controls.render_points);
+    ImGui::Checkbox("render wireframe", &controls.render_wireframe);
+
+    ImGui::Separator();
+    ImGui::Text("simulation controls:");
+    ImGui::Checkbox("log input nodes", &controls.log_input_nodes);
+    ImGui::Checkbox("log output nodes", &controls.log_output_nodes);
+    ImGui::Checkbox("log render data", &controls.log_render_data);
+    ImGui::InputInt("num iters", &controls.num_iters);
+    if (ImGui::Button("run simulation")) {
+      run_simulation_pipeline(g_state);  
+    }
+
     ImGui::End();
 
     ImGui::Render();
