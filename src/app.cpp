@@ -49,10 +49,10 @@ struct Camera {
 };
 
 Camera::Camera() {
-  vec3 forward(0.0,0.0,1.0);
+  vec3 forward(0.0,0.0,-1.0);
   vec3 up(0.0,1.0,0.0);
   vec3 right = cross(up, forward);
-  vec3 pos(0.0,0.0,-10.0);
+  vec3 pos(0.0,0.0,10.0);
 
   cam_to_world[0] = vec4(right, 0.0);
   cam_to_world[1] = vec4(up, 0.0);
@@ -601,6 +601,35 @@ MorphNodes read_nodes_from_vbos(MorphState& m_state) {
   return node_vecs;
 }
 
+// helper for generate_render_data
+// The nodes must be given in CCW winding order
+void add_triangle_face(vector<Vertex>& vertices, vector<GLuint>& indices,
+    MorphNode& node_a, MorphNode& node_b, MorphNode& node_c) {
+  
+  // calc the normal from the face positions.
+  vec3 nor = cross(node_b.pos - node_a.pos, node_c.pos - node_a.pos);
+  if (dot(nor, nor) < 1e-12) {
+    // the face has no area, so skip it
+    return;
+  }
+  nor = normalize(nor);
+  GLuint index_offset = vertices.size();
+  vector<MorphNode> nodes = {node_a, node_b, node_c};
+  for (auto& node : nodes) {
+    Vertex vertex;
+    vertex.pos = node.pos;
+    vertex.nor = nor;
+    vertex.col = vec4(0.0,1.0,0.0,1.0);
+    vertices.push_back(vertex);
+  }
+  // add the new indices
+  vector<GLuint> new_indices = {
+    index_offset, index_offset + 1, index_offset + 2
+  };
+  indices.insert(indices.end(),
+      new_indices.begin(), new_indices.end());
+}
+
 // Use the simulation data to generate render data
 void generate_render_data(GraphicsState& g_state) {  
   MorphState& m_state = g_state.morph_state;
@@ -617,7 +646,7 @@ void generate_render_data(GraphicsState& g_state) {
     printf("\n\n");
   }
 
-  // conver the Node data to render data
+  // convert the Node data to render data
   
   vector<Vertex> vertices;
   vector<GLuint> indices;
@@ -625,32 +654,16 @@ void generate_render_data(GraphicsState& g_state) {
   for (int i = 0; i < node_vecs.node_type_vec.size(); ++i) {
     MorphNode node = node_vecs.node_at(i);
     if (node.node_type == TYPE_FACE) {
-      GLuint index_offset = vertices.size();
       vector<MorphNode> face_nodes;
       for (int j = 0; j < 4; ++j) {
         int node_index = node.neighbors[j];
         face_nodes.push_back(node_vecs.node_at(node_index));
       }
-      // calc the normal from the face positions
-      // TODO - normals are acting weird
-      vec3 pos_a = face_nodes[0].pos;
-      vec3 pos_b = face_nodes[1].pos;
-      vec3 pos_c = face_nodes[3].pos;
-      vec3 nor = normalize(cross(pos_b - pos_a, pos_c - pos_a));
-      for (auto& node : face_nodes) {
-        Vertex vertex;
-        vertex.pos = node.pos;
-        vertex.nor = nor;
-        vertex.col = vec4(0.0,1.0,0.0,1.0);
-        vertices.push_back(vertex);
-      }
-      // quad to 2 triangles
-      vector<GLuint> new_indices = {
-        index_offset, index_offset + 1, index_offset + 2,
-        index_offset, index_offset + 2, index_offset + 3
-      };
-      indices.insert(indices.end(),
-          new_indices.begin(), new_indices.end());
+      // generate 2 triangle faces for each quad
+      add_triangle_face(vertices, indices,
+          face_nodes[0], face_nodes[1], face_nodes[2]);
+      add_triangle_face(vertices, indices,
+          face_nodes[0], face_nodes[2], face_nodes[3]);
     }
   }
 
@@ -745,11 +758,37 @@ vector<MorphNode> gen_morph_data(ivec2 samples) {
       // MorphNode is conceptually a union. The other fields are unused with face type
       MorphNode face_node;
       face_node.node_type = TYPE_FACE;
-      // use CCW winding order
+      // we will ensure that the order is CCW winding later
       face_node.neighbors = ivec4(patch_a, patch_b, patch_d, patch_c);
       face_nodes.push_back(face_node);
     }
   }
+  // adjust the order of a face's vertex indices s.t. they are in CCW winding order.
+  // uses the fact that we are generating a sphere about the origin.
+  // we must allow for the face that at the poles two quad positions may be the same
+  for (MorphNode& node : face_nodes) {
+    ivec4 indices = node.neighbors;
+    vec3 p0 = vertex_nodes[indices[0]].pos;
+    vec3 p1 = vertex_nodes[indices[1]].pos;
+    vec3 p2 = vertex_nodes[indices[2]].pos;
+    vec3 p3 = vertex_nodes[indices[3]].pos;
+    vec3 du = p1 - p0;
+    vec3 dv = p3 - p0;
+    float eps = 1e-12;
+    if (dot(du,du) < eps || dot(dv, dv) < eps) {
+      // if p0 is at the same pt as p1 or p3, then p2 must not be at the same
+      // pt as any other pt of the quad (ow we have a line, not a face)
+      du = p3 - p2;
+      dv = p1 - p2;
+    }
+    vec3 nor = cross(du, dv);
+    vec3 face_pos = (p0 + p1 + p2 + p3) / 4.0f;
+    // if the normal points inwards to the origin, reverse the order of the indices
+    if (dot(face_pos, nor) < 0) {
+      node.neighbors = ivec4(indices[3], indices[2], indices[1], indices[0]);
+    }
+  }
+
   // offset the face indices, since the full array will be [vert_nodes, face_nodes]
   // the face node indices don't require adjustment
   for (MorphNode& node : vertex_nodes) {
@@ -770,6 +809,17 @@ vector<MorphNode> gen_sample_data() {
   return nodes;
 }
 
+vector<MorphNode> gen_sample_square() {
+  vector<MorphNode> nodes = {
+    MorphNode(0, vec3(-0.5,-0.5,0.0), ivec4(3,-1,1,-1), ivec4(5,-1,-1,-1)),
+    MorphNode(0, vec3(0.5,-0.5,0.0), ivec4(2,-1,-1,0), ivec4(-1,-1,-1,5)),
+    MorphNode(0, vec3(0.5,0.5,0.0), ivec4(0,1,-1,3), ivec4(-1,5,-1,-5)),
+    MorphNode(0, vec3(-0.5,0.5,0.0), ivec4(-1,0,2,-1), ivec4(-1,-1,5,-1)),
+    MorphNode(1, vec3(0.0), ivec4(0, 1, 2, 3), ivec4(0))
+  };
+  return nodes;
+}
+
 void set_initial_sim_data(GraphicsState& g_state) {
   log_gl_errors("start set_initial_sim_data");
 
@@ -778,6 +828,7 @@ void set_initial_sim_data(GraphicsState& g_state) {
   ivec2 zygote_samples(g_state.controls.num_zygote_samples);
   vector<MorphNode> nodes = gen_morph_data(zygote_samples);
   //vector<MorphNode> nodes = gen_sample_data();
+  //vector<MorphNode> nodes = gen_sample_square();
   MorphNodes node_vecs(nodes);
 
   // log nodes
@@ -914,6 +965,10 @@ void handle_key_event(GLFWwindow* win, int key, int scancode,
     int action, int mods) {
   GraphicsState* g_state = static_cast<GraphicsState*>(glfwGetWindowUserPointer(win));
   //printf("key event\n");
+  if (key == GLFW_KEY_R && action == GLFW_PRESS) {
+    // reset camera pos
+    g_state->camera = Camera();
+  }
 }
 
 void update_camera(GLFWwindow* win, Camera& cam) {
