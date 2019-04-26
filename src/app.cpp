@@ -13,9 +13,11 @@
 #include <thread>
 #include <array>
 #include <vector>
+#include <utility>
 #include <unordered_map>
 #include <sstream>
 #include <fstream>
+#include <cstddef>
 #include "shaders/render_shaders.h"
 #include "shaders/morph_shaders.h"
 
@@ -74,14 +76,14 @@ struct RenderState {
   int elem_count;
   int vertex_count;
 
-  GLuint unif_mv_matrix;
-  GLuint unif_proj_matrix;
-  GLuint unif_debug_render;
-  GLuint unif_debug_color;
+  GLint unif_mv_matrix;
+  GLint unif_proj_matrix;
+  GLint unif_debug_render;
+  GLint unif_debug_color;
 
-  GLuint pos_attrib;
-  GLuint nor_attrib;
-  GLuint col_attrib;
+  GLint pos_attrib;
+  GLint nor_attrib;
+  GLint col_attrib;
 };
 
 // For use in the interleaved transform feedback buffer
@@ -97,6 +99,8 @@ struct MorphNode {
   ivec4 faces;
 
   MorphNode();
+  MorphNode(int node_type, vec3 pos,
+      ivec4 neighbors, ivec4 faces);
 };
 
 MorphNode::MorphNode():
@@ -107,6 +111,64 @@ MorphNode::MorphNode():
 {
 }
 
+MorphNode::MorphNode(int node_type, vec3 pos,
+    ivec4 neighbors, ivec4 faces) :
+  node_type(node_type),
+  pos(pos),
+  neighbors(neighbors),
+  faces(faces)
+{
+}
+
+struct MorphNodes {
+  vector<int> node_type_vec;
+  vector<vec3> pos_vec;
+  vector<ivec4> neighbors_vec;
+  vector<ivec4> faces_vec;
+
+  MorphNodes(size_t num_nodes);
+  MorphNodes(vector<MorphNode> const& nodes);
+  MorphNode node_at(size_t i) const;
+};
+
+MorphNodes::MorphNodes(size_t num_nodes) :
+  node_type_vec(num_nodes),
+  pos_vec(num_nodes),
+  neighbors_vec(num_nodes),
+  faces_vec(num_nodes)
+{
+}
+
+MorphNodes::MorphNodes(vector<MorphNode> const& nodes) :
+  node_type_vec(nodes.size()),
+  pos_vec(nodes.size()),
+  neighbors_vec(nodes.size()),
+  faces_vec(nodes.size())
+{
+  for (int i = 0; i < nodes.size(); ++i) {
+    MorphNode const& node = nodes[i];
+    node_type_vec[i] = node.node_type;
+    pos_vec[i] = node.pos;
+    neighbors_vec[i] = node.neighbors;
+    faces_vec[i] = node.faces;
+  }
+}
+
+MorphNode MorphNodes::node_at(size_t i) const {
+  return MorphNode(node_type_vec[i],
+      pos_vec[i], neighbors_vec[i], faces_vec[i]);
+}
+
+string raw_node_str(MorphNode const& node) {
+  array<char, 200> s;
+  sprintf(s.data(), "type: %d pos: %s, neighbors: %s, faces: %s",
+        node.node_type,
+        vec3_str(node.pos).c_str(), ivec4_str(node.neighbors).c_str(),
+        ivec4_str(node.faces).c_str());
+  return string(s.data());
+}
+
+// a more compact node string
 string node_str(MorphNode const& node) {
   array<char, 200> s;
   if (node.node_type == TYPE_VERTEX) {
@@ -119,23 +181,32 @@ string node_str(MorphNode const& node) {
   return string(s.data());
 }
 
+// These serve as indices into the MorphBuffer vbos and tex_buf arrays
+enum MorphBuffers {
+  BUF_NODE_TYPE = 0,
+  BUF_POS,
+  BUF_NEIGHBORS,
+  BUF_FACES,
+
+  MORPH_BUF_COUNT
+};
+
 struct MorphBuffer {
   GLuint vao;
-  GLuint vbo;
-  GLuint tex_buf;
+  array<GLuint, MORPH_BUF_COUNT> vbos;
+  array<GLuint, MORPH_BUF_COUNT> tex_bufs;
 };
 
 struct MorphState {
   GLuint prog;
+  // for double-buffering
   array<MorphBuffer, 2> buffers;
   // set to the index of the buffer that holds
   // the most recent simulation result
   int result_buffer_index;
 
-  GLuint node_type_attrib;
-  GLuint pos_attrib;
-  GLuint neighbors_attrib;
-  GLuint faces_attrib;
+  array<GLint, MORPH_BUF_COUNT> node_attribs;
+  array<GLint, MORPH_BUF_COUNT> unif_samplers;
 
   // the number of nodes used in the most recent sim
   int num_nodes;
@@ -161,9 +232,9 @@ GraphicsState::GraphicsState() :
   render_faces(true),
   render_points(true),
   render_wireframe(false),
-  log_input_nodes(false),
-  log_output_nodes(false),
-  log_render_data(false)
+  log_input_nodes(true),
+  log_output_nodes(true),
+  log_render_data(true)
 {
 }
 
@@ -181,12 +252,20 @@ void glfw_error_callback(int error_code, const char* error_msg) {
 }
 
 void log_opengl_info() {
+  // main info
   const GLubyte* vendor = glGetString(GL_VENDOR);
   const GLubyte* renderer = glGetString(GL_RENDERER);
   const GLubyte* version = glGetString(GL_VERSION);
   const GLubyte* glsl_version = glGetString(GL_SHADING_LANGUAGE_VERSION);
   printf("vendor: %s\nrenderer: %s\nversion: %s\nglsl version: %s\n",
       vendor, renderer, version, glsl_version);  
+
+  // secondary info
+  GLint value = 0;
+  glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &value);
+  printf("GL_MAX_TEXTURE_BUFFER_SIZE %d\n", value);
+  glGetIntegerv(GL_MAX_TEXTURE_SIZE, &value);
+  printf("GL_MAX_TEXTURE_SIZE %d\n", value);
 }
 
 void log_gl_errors(string msg) {
@@ -264,7 +343,7 @@ GLuint setup_program(string prog_name,
       "out_faces"
     };
     glTransformFeedbackVaryings(program, varyings.size(),
-        varyings.data(), GL_INTERLEAVED_ATTRIBS);
+        varyings.data(), GL_SEPARATE_ATTRIBS);
   }
 
   glLinkProgram(program);
@@ -339,7 +418,7 @@ void configure_render_program(GraphicsState& g_state) {
 }
 
 // The maximum # of morph nodes
-const int MORPH_NODE_VBO_SIZE = (int) 1e8;
+const int MAX_NUM_MORPH_NODES = (int) (1e8 / (float) sizeof(MorphNode));
 
 void configure_morph_program(GraphicsState& g_state) {
   MorphState& m_state = g_state.morph_state;
@@ -347,42 +426,71 @@ void configure_morph_program(GraphicsState& g_state) {
   m_state.prog = setup_program(
       "morph program", MORPH_VERTEX_SRC, MORPH_FRAGMENT_SRC, true);
   
-  m_state.node_type_attrib = glGetAttribLocation(m_state.prog, "node_type");
-  m_state.pos_attrib = glGetAttribLocation(m_state.prog, "pos");
-  m_state.neighbors_attrib = glGetAttribLocation(m_state.prog, "neighbors");
-  m_state.faces_attrib = glGetAttribLocation(m_state.prog, "faces");
-  vector<GLuint> all_attribs = {m_state.node_type_attrib, m_state.pos_attrib,
-    m_state.neighbors_attrib, m_state.faces_attrib};
-  for (GLuint attrib : all_attribs) {
-    assert(attrib != -1);
+  // setup node attributes
+  vector<const char*> node_attrib_names = {
+    "node_type", "pos", "neighbors", "faces"
+  };
+  for (int i = 0; i < m_state.node_attribs.size(); ++i) {
+    m_state.node_attribs[i] = glGetAttribLocation(
+        m_state.prog, node_attrib_names[i]);
+    assert(m_state.node_attribs[i] != -1);
+  }
+  // setup texture buffer samplers
+  vector<const char*> unif_sampler_names = {
+    "node_type_buf", "pos_buf", "neighbors_buf", "faces_buf"
+  };
+  glUseProgram(m_state.prog);
+  for (int i = 0; i < m_state.unif_samplers.size(); ++i) {
+    m_state.unif_samplers[i] = glGetUniformLocation(
+        m_state.prog, unif_sampler_names[i]);
+    if (m_state.unif_samplers[i] != -1) {
+      // set the sampler i to use texture unit i
+      glUniform1i(m_state.unif_samplers[i], i);
+    } else {
+      printf("WARNING sampler is -1: %s\n", unif_sampler_names[i]);
+    }
   }
 
   for (MorphBuffer& m_buf : m_state.buffers) {
     glGenVertexArrays(1, &m_buf.vao);
     glBindVertexArray(m_buf.vao);
 
-    glGenBuffers(1, &m_buf.vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbo);
-    glBufferData(GL_ARRAY_BUFFER, MORPH_NODE_VBO_SIZE, nullptr, GL_DYNAMIC_COPY);
-
-    // setup attributes
-
-    glVertexAttribIPointer(m_state.node_type_attrib, 1, GL_INT,
-        sizeof(MorphNode), (void*) offsetof(MorphNode, node_type));
-    glVertexAttribPointer(m_state.pos_attrib, 3, GL_FLOAT, GL_FALSE,
-        sizeof(MorphNode), (void*) offsetof(MorphNode, pos));
-    glVertexAttribIPointer(m_state.neighbors_attrib, 4, GL_INT,
-        sizeof(MorphNode), (void*) offsetof(MorphNode, neighbors));
-    glVertexAttribIPointer(m_state.faces_attrib, 4, GL_INT,
-        sizeof(MorphNode), (void*) offsetof(MorphNode, faces));
-
-    for (GLuint attrib : all_attribs) {
-      glEnableVertexAttribArray(attrib);
+    // setup VBOs
+    glGenBuffers(m_buf.vbos.size(), m_buf.vbos.data());
+    vector<int> elem_sizes = {
+      sizeof(MorphNode().node_type),
+      sizeof(MorphNode().pos),
+      sizeof(MorphNode().neighbors),
+      sizeof(MorphNode().faces)
+    };
+    for (int i = 0; i < m_buf.vbos.size(); ++i) {
+      glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbos[i]);
+      glBufferData(GL_ARRAY_BUFFER,
+          MAX_NUM_MORPH_NODES * elem_sizes[i], nullptr, GL_DYNAMIC_COPY);
     }
 
-    glGenTextures(1, &m_buf.tex_buf);
-    glBindTexture(GL_TEXTURE_BUFFER, m_buf.tex_buf);
-    glTexBuffer(GL_TEXTURE_BUFFER, GL_R8, m_buf.vbo);
+    // setup attributes
+    glVertexAttribIPointer(
+        m_state.node_attribs[BUF_NODE_TYPE], 1, GL_INT, 0, nullptr);
+    glVertexAttribPointer(
+        m_state.node_attribs[BUF_POS], 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+    glVertexAttribIPointer(
+        m_state.node_attribs[BUF_NEIGHBORS], 4, GL_INT, 0, nullptr);
+    glVertexAttribIPointer(
+        m_state.node_attribs[BUF_FACES], 4, GL_INT, 0, nullptr);
+    for (int i = 0; i < m_state.node_attribs.size(); ++i) {
+      glEnableVertexAttribArray(m_state.node_attribs[i]);
+    }
+
+    // setup texture buffers
+    glGenTextures(m_buf.tex_bufs.size(), m_buf.tex_bufs.data());
+    vector<GLenum> internal_formats = {
+      GL_R32I, GL_RGB32F, GL_RGBA32I, GL_RGBA32I
+    };
+    for (int i = 0; i < m_buf.tex_bufs.size(); ++i) {
+      glBindTexture(GL_TEXTURE_BUFFER, m_buf.tex_bufs[i]);
+      glTexBuffer(GL_TEXTURE_BUFFER, internal_formats[i], m_buf.vbos[i]);
+    }
   }
 }
 
@@ -395,23 +503,56 @@ void setup_opengl(GraphicsState& state) {
   log_gl_errors("done setup_opengl");
 }
 
+void write_nodes_to_vbos(MorphBuffer& m_buf, MorphNodes& node_vecs) {
+
+  // each pair is {element size, data pointer}
+  vector<pair<int, GLvoid*>> data_params = {
+    {sizeof(int), node_vecs.node_type_vec.data()},
+    {sizeof(vec3), node_vecs.pos_vec.data()},
+    {sizeof(ivec4), node_vecs.neighbors_vec.data()},
+    {sizeof(ivec4), node_vecs.faces_vec.data()}
+  };
+  int num_nodes = node_vecs.node_type_vec.size();
+  glBindVertexArray(m_buf.vao);
+  for (int i = 0; i < m_buf.vbos.size(); ++i) {
+    glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbos[i]);
+    glBufferSubData(GL_ARRAY_BUFFER, 0,
+        data_params[i].first * num_nodes, data_params[i].second);
+  }
+}
+
+MorphNodes read_nodes_from_vbos(MorphState& m_state) {
+  MorphBuffer& target_buf = m_state.buffers[m_state.result_buffer_index];
+  MorphNodes node_vecs(m_state.num_nodes);
+
+  // each pair is {element size, target array}
+  vector<pair<int, GLvoid*>> data_params = {
+    {sizeof(int), node_vecs.node_type_vec.data()},
+    {sizeof(vec3), node_vecs.pos_vec.data()},
+    {sizeof(ivec4), node_vecs.neighbors_vec.data()},
+    {sizeof(ivec4), node_vecs.faces_vec.data()}
+  };
+  glBindVertexArray(target_buf.vao);
+  for (int i = 0; i < target_buf.vbos.size(); ++i) {
+    glBindBuffer(GL_ARRAY_BUFFER, target_buf.vbos[i]);
+    glGetBufferSubData(GL_ARRAY_BUFFER, 0,
+      m_state.num_nodes * data_params[i].first, data_params[i].second);
+  }
+  return node_vecs;
+}
+
 // Use the simulation data to generate render data
 void generate_render_data(GraphicsState& g_state) {  
   MorphState& m_state = g_state.morph_state;
-  MorphBuffer& target_buf = m_state.buffers[m_state.result_buffer_index];
-  glBindVertexArray(target_buf.vao);
-  glBindBuffer(GL_ARRAY_BUFFER, target_buf.vbo);
 
-  // read Node data from GPU
-  vector<MorphNode> nodes{(size_t) m_state.num_nodes};
-  glGetBufferSubData(GL_ARRAY_BUFFER, 0, m_state.num_nodes * sizeof(MorphNode), nodes.data());
-  
+  MorphNodes node_vecs = read_nodes_from_vbos(m_state);
+    
   if (g_state.log_output_nodes) {
     // log nodes
     printf("output nodes (%d):\n", m_state.num_nodes); 
-    for (int i = 0; i < nodes.size(); ++i) {
-      MorphNode& node = nodes[i];
-      printf("%4d %s\n", i, node_str(node).c_str());
+    for (int i = 0; i < node_vecs.node_type_vec.size(); ++i) {
+      MorphNode node = node_vecs.node_at(i);
+      printf("%4d %s\n", i, raw_node_str(node).c_str());
     }
     printf("\n\n");
   }
@@ -421,14 +562,14 @@ void generate_render_data(GraphicsState& g_state) {
   vector<Vertex> vertices;
   vector<GLuint> indices;
 
-  for (int i = 0; i < nodes.size(); ++i) {
-    MorphNode& node = nodes[i];
+  for (int i = 0; i < node_vecs.node_type_vec.size(); ++i) {
+    MorphNode node = node_vecs.node_at(i);
     if (node.node_type == TYPE_FACE) {
       GLuint index_offset = vertices.size();
       vector<MorphNode> face_nodes;
       for (int j = 0; j < 4; ++j) {
         int node_index = node.neighbors[j];
-        face_nodes.push_back(nodes[node_index]);
+        face_nodes.push_back(node_vecs.node_at(node_index));
       }
       // TODO - calc the normal from 3 positions
       vec3 nor(0.0,1.0,0.0);
@@ -501,8 +642,7 @@ int coord_to_index(ivec2 coord, ivec2 samples) {
 }
 
 vector<MorphNode> gen_morph_data() {
-  ivec2 samples(10, 10);
-  // TODO - can optimize may using a single vector of size 2*sx*sy
+  ivec2 samples(4, 4);
   vector<MorphNode> vertex_nodes;
   vector<MorphNode> face_nodes;
   for (int y = 0; y < samples[1]; ++y) {
@@ -571,24 +711,26 @@ void set_initial_sim_data(GraphicsState& g_state) {
 
   MorphBuffer& m_buf = g_state.morph_state.buffers[0];
 
-  vector<MorphNode> nodes = gen_morph_data();
-  //vector<MorphNode> nodes = gen_sample_data();
+  // TODO
+  //vector<MorphNode> nodes = gen_morph_data();
+  vector<MorphNode> nodes = gen_sample_data();
+  MorphNodes node_vecs(nodes);
 
   // log nodes
   if (g_state.log_input_nodes) {
     printf("input nodes:\n");
-    for (int i = 0; i < nodes.size(); ++i) {
-      printf("%4d %s\n", i, node_str(nodes[i]).c_str());
+    for (int i = 0; i < node_vecs.node_type_vec.size(); ++i) {
+      MorphNode node = node_vecs.node_at(i);
+      printf("%4d %s\n", i, raw_node_str(node).c_str());
     }
     printf("\n\n");
   }
 
-  glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbo);
-  size_t node_data_len = nodes.size() * sizeof(MorphNode);
-  assert(node_data_len <= MORPH_NODE_VBO_SIZE);
-  glBufferSubData(GL_ARRAY_BUFFER, 0, node_data_len, nodes.data());
+  assert(nodes.size() < MAX_NUM_MORPH_NODES);
   g_state.morph_state.num_nodes = nodes.size();
 
+  write_nodes_to_vbos(m_buf, node_vecs);
+  
   log_gl_errors("done set_initial_sim_data");
 }
 
@@ -600,17 +742,25 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
 
   // perform double-buffered iterations
   // assume the initial data is in buffer 0
+  printf("starting sim: %d iters, %d nodes\n", num_iters, m_state.num_nodes);
   for (int i = 0; i < num_iters; ++i) {
     MorphBuffer& cur_buf = m_state.buffers[i & 1];
     MorphBuffer& next_buf = m_state.buffers[(i + 1) & 1];
 
+    // setup texture buffers and transform feedback buffers
     glBindVertexArray(cur_buf.vao);
-    glBindTexture(GL_TEXTURE_BUFFER, cur_buf.tex_buf);
-    glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, next_buf.vbo);
+    for (int i = 0; i < MORPH_BUF_COUNT; ++i) {
+      glActiveTexture(GL_TEXTURE0 + i);
+      glBindTexture(GL_TEXTURE_BUFFER, cur_buf.tex_bufs[i]);
+
+      glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, i, next_buf.vbos[i]);
+    }
+
     glBeginTransformFeedback(GL_POINTS);
     glDrawArrays(GL_POINTS, 0, m_state.num_nodes);
     glEndTransformFeedback();
   }
+  printf("done sim\n");
   // store the index of the most recently written buffer
   m_state.result_buffer_index = num_iters % 2;
 
@@ -658,6 +808,7 @@ void render_frame(GraphicsState& g_state) {
 
   if (g_state.render_faces) {
     glUniform1i(r_state.unif_debug_render, 0);
+    // TODO - it's already bound, but it's good form to bind the index array
     glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
   }
   vec3 debug_col(1.0,0.0,0.0);
@@ -762,9 +913,11 @@ void run_app() {
   //ImGui::StyleColorsClassic();
 
   // TODO - make a simple UI for this
+  log_gl_errors("starting generation\n");
   set_initial_sim_data(g_state);
   run_simulation(g_state, 1);
   generate_render_data(g_state);
+  log_gl_errors("finished generation\n");
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   const char* glsl_version = "#version 150";
