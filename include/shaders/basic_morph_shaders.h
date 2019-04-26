@@ -1,17 +1,12 @@
-const char* MORPH_VERTEX_SRC = R"--(
+const char* MORPH_BASIC_VERTEX_SRC = R"--(
 #version 410
 
-struct MorphNode {
-  int node_type;
-  vec3 pos;
-  ivec4 neighbors;
-  ivec4 faces;
-};
-
-in int node_type;
-in vec3 pos;
-in ivec4 neighbors;
-in ivec4 faces;
+// use explicit locations so that these attributes in 
+// different programs explicitly use the same attribute indices
+layout (location = 0) in int node_type;
+layout (location = 1) in vec3 pos;
+layout (location = 2) in ivec4 neighbors;
+layout (location = 3) in ivec4 faces;
 
 uniform isamplerBuffer node_type_buf;
 uniform samplerBuffer pos_buf;
@@ -30,23 +25,10 @@ void main() {
   int baz = texelFetch(node_type_buf, 0).r;
 
   out_node_type = node_type;
-  out_pos = pos + vec3(1.0,0.0,0.0);// + vec3(1.0,float(neighbors[1]),0.0);
+  out_pos = pos + vec3(-1.0,0.0,0.0);
   out_neighbors = neighbors;
   out_faces = faces;
 }
 
 )--";
 
-// This is a dummy fragment shader.
-// Rasterization is disabled b/c we only need the transform feedback stage.
-const char* MORPH_FRAGMENT_SRC = R"--(
-#version 410
-
-in vec3 out_pos;
-
-out vec4 color;
-
-void main() {
-  color = vec4(1.0,0.0,0.0,1.0);
-}
-)--";

@@ -20,7 +20,8 @@
 #include <fstream>
 #include <cstddef>
 #include "shaders/render_shaders.h"
-#include "shaders/morph_shaders.h"
+#include "shaders/dummy_morph_shaders.h"
+#include "shaders/basic_morph_shaders.h"
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include "glm/glm.hpp"
@@ -198,20 +199,42 @@ struct MorphBuffer {
   array<GLuint, MORPH_BUF_COUNT> tex_bufs;
 };
 
+struct MorphProgram {
+  string name;
+  GLuint gl_handle;
+  array<GLint, MORPH_BUF_COUNT> unif_samplers;
+
+  MorphProgram(string name);
+};
+
+MorphProgram::MorphProgram(string name) :
+  name(name),
+  gl_handle(-1)
+{
+}
+
 struct MorphState {
-  GLuint prog;
   // for double-buffering
   array<MorphBuffer, 2> buffers;
   // set to the index of the buffer that holds
   // the most recent simulation result
   int result_buffer_index;
 
-  array<GLint, MORPH_BUF_COUNT> node_attribs;
-  array<GLint, MORPH_BUF_COUNT> unif_samplers;
-
+  vector<MorphProgram> programs;
+  int cur_prog_index;
+  
   // the number of nodes used in the most recent sim
   int num_nodes;
+
+  MorphState();
 };
+
+MorphState::MorphState() :
+  result_buffer_index(0),
+  cur_prog_index(0),
+  num_nodes(0)
+{
+}
 
 struct Controls {
   // rendering
@@ -223,6 +246,7 @@ struct Controls {
   bool log_input_nodes;
   bool log_output_nodes;
   bool log_render_data;
+  int num_zygote_samples;
   int num_iters;
 
   Controls();
@@ -231,10 +255,11 @@ struct Controls {
 Controls::Controls() :
   render_faces(true),
   render_points(true),
-  render_wireframe(false),
+  render_wireframe(true),
   log_input_nodes(false),
   log_output_nodes(false),
   log_render_data(false),
+  num_zygote_samples(4),
   num_iters(1)
 {
 }
@@ -373,7 +398,7 @@ GLuint setup_program(string prog_name,
 const GLsizeiptr RENDER_VBO_SIZE = (GLsizeiptr) 1e8;
 const GLsizeiptr RENDER_INDEX_BUFFER_SIZE = (GLsizeiptr) 1e8;
 
-void configure_render_program(GraphicsState& g_state) {
+void init_render_state(GraphicsState& g_state) {
   RenderState& r_state = g_state.render_state;
 
   glEnable(GL_DEPTH_TEST);
@@ -430,38 +455,52 @@ void configure_render_program(GraphicsState& g_state) {
 // The maximum # of morph nodes
 const int MAX_NUM_MORPH_NODES = (int) (1e8 / (float) sizeof(MorphNode));
 
-void configure_morph_program(GraphicsState& g_state) {
-  MorphState& m_state = g_state.morph_state;
-
-  m_state.prog = setup_program(
-      "morph program", MORPH_VERTEX_SRC, MORPH_FRAGMENT_SRC, true);
+MorphProgram init_morph_program(const char* prog_name,
+    const char* vertex_src) {
+  MorphProgram prog(prog_name);
+  prog.gl_handle = setup_program(
+      prog_name, vertex_src, MORPH_DUMMY_FRAGMENT_SRC, true);
   
-  // setup node attributes
-  vector<const char*> node_attrib_names = {
-    "node_type", "pos", "neighbors", "faces"
-  };
-  for (int i = 0; i < m_state.node_attribs.size(); ++i) {
-    m_state.node_attribs[i] = glGetAttribLocation(
-        m_state.prog, node_attrib_names[i]);
-    assert(m_state.node_attribs[i] != -1);
-  }
+  // Note: we do not need to get the input attribute locations
+  // b/c they are explicit in each program
+  
   // setup texture buffer samplers
   vector<const char*> unif_sampler_names = {
     "node_type_buf", "pos_buf", "neighbors_buf", "faces_buf"
   };
-  glUseProgram(m_state.prog);
-  for (int i = 0; i < m_state.unif_samplers.size(); ++i) {
-    m_state.unif_samplers[i] = glGetUniformLocation(
-        m_state.prog, unif_sampler_names[i]);
-    if (m_state.unif_samplers[i] != -1) {
-      // set the sampler i to use texture unit i
-      glUniform1i(m_state.unif_samplers[i], i);
+  glUseProgram(prog.gl_handle);
+  for (int i = 0; i < prog.unif_samplers.size(); ++i) {
+    prog.unif_samplers[i] = glGetUniformLocation(
+        prog.gl_handle, unif_sampler_names[i]);
+    if (prog.unif_samplers[i] != -1) {
+      // set the sampler i to use texture unit i. When rendering,
+      // texture buffer i will be bound to texture unit i, and 
+      // texture buffer i is backed by VBO i (containing the data
+      // for the ith member of the MorphNode struct)
+      glUniform1i(prog.unif_samplers[i], i);
     } else {
       printf("WARNING sampler is -1: %s\n", unif_sampler_names[i]);
     }
+  }  
+  return prog;
+}
+
+void init_morph_state(GraphicsState& g_state) {
+  MorphState& m_state = g_state.morph_state;
+
+  // setup all of the morph programs
+  // each pair is {program name, program src}
+  vector<pair<const char*, const char*>> programs = {
+    {"dummy", MORPH_DUMMY_VERTEX_SRC},
+    {"basic", MORPH_BASIC_VERTEX_SRC}
+  };
+  for (auto& elem : programs) {
+    MorphProgram prog = init_morph_program(elem.first, elem.second);
+    m_state.programs.push_back(prog);
   }
 
-  // setup each of the 2 buffers, for double-buffering
+  // Setup the VAO and other state for each of the two buffers
+  // used for double-buffering
   for (MorphBuffer& m_buf : m_state.buffers) {
     glGenVertexArrays(1, &m_buf.vao);
     glBindVertexArray(m_buf.vao);
@@ -481,14 +520,17 @@ void configure_morph_program(GraphicsState& g_state) {
       glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbos[i]);
       glBufferData(GL_ARRAY_BUFFER,
           MAX_NUM_MORPH_NODES * get<0>(params), nullptr, GL_DYNAMIC_COPY);
+
+      // Note that we only need to setup these attributes once for each VAO
+      // b/c their locations are explicitly the same in each program
       if (get<3>(params)) {
-        glVertexAttribIPointer(m_state.node_attribs[i],
+        glVertexAttribIPointer(i,
             get<1>(params), get<2>(params), 0, nullptr);
       } else {
-        glVertexAttribPointer(m_state.node_attribs[i],
+        glVertexAttribPointer(i,
             get<1>(params), get<2>(params), GL_FALSE, 0, nullptr);
       }
-      glEnableVertexAttribArray(m_state.node_attribs[i]);
+      glEnableVertexAttribArray(i);
     }
 
     // setup texture buffers
@@ -506,8 +548,8 @@ void configure_morph_program(GraphicsState& g_state) {
 void setup_opengl(GraphicsState& state) {
   log_opengl_info();
   
-  configure_render_program(state);
-  configure_morph_program(state);
+  init_render_state(state);
+  init_morph_state(state);
 
   log_gl_errors("done setup_opengl");
 }
@@ -651,8 +693,7 @@ int coord_to_index(ivec2 coord, ivec2 samples) {
   return pos_mod(coord[0], samples[0]) + samples[0] * pos_mod(coord[1], samples[1]);
 }
 
-vector<MorphNode> gen_morph_data() {
-  ivec2 samples(4, 4);
+vector<MorphNode> gen_morph_data(ivec2 samples) {
   vector<MorphNode> vertex_nodes;
   vector<MorphNode> face_nodes;
   for (int y = 0; y < samples[1]; ++y) {
@@ -721,7 +762,8 @@ void set_initial_sim_data(GraphicsState& g_state) {
 
   MorphBuffer& m_buf = g_state.morph_state.buffers[0];
 
-  vector<MorphNode> nodes = gen_morph_data();
+  ivec2 zygote_samples(g_state.controls.num_zygote_samples);
+  vector<MorphNode> nodes = gen_morph_data(zygote_samples);
   //vector<MorphNode> nodes = gen_sample_data();
   MorphNodes node_vecs(nodes);
 
@@ -746,7 +788,8 @@ void set_initial_sim_data(GraphicsState& g_state) {
 void run_simulation(GraphicsState& g_state, int num_iters) {
   MorphState& m_state = g_state.morph_state;
 
-  glUseProgram(m_state.prog);
+  MorphProgram& m_prog = m_state.programs[m_state.cur_prog_index];
+  glUseProgram(m_prog.gl_handle);
   glEnable(GL_RASTERIZER_DISCARD);
 
   // perform double-buffered iterations
@@ -985,7 +1028,14 @@ void run_app() {
     ImGui::Checkbox("log input nodes", &controls.log_input_nodes);
     ImGui::Checkbox("log output nodes", &controls.log_output_nodes);
     ImGui::Checkbox("log render data", &controls.log_render_data);
+    vector<const char*> prog_names;
+    for (auto& prog : g_state.morph_state.programs) {
+      prog_names.push_back(prog.name.c_str());
+    }
+    ImGui::Combo("program", &g_state.morph_state.cur_prog_index,
+        prog_names.data(), prog_names.size());
     ImGui::InputInt("num iters", &controls.num_iters);
+    ImGui::InputInt("AxA samples", &controls.num_zygote_samples);
     if (ImGui::Button("run simulation")) {
       run_simulation_pipeline(g_state);  
     }
