@@ -14,6 +14,7 @@
 #include <array>
 #include <vector>
 #include <utility>
+#include <tuple>
 #include <unordered_map>
 #include <sstream>
 #include <fstream>
@@ -451,34 +452,33 @@ void configure_morph_program(GraphicsState& g_state) {
     }
   }
 
+  // setup each of the 2 buffers, for double-buffering
   for (MorphBuffer& m_buf : m_state.buffers) {
     glGenVertexArrays(1, &m_buf.vao);
     glBindVertexArray(m_buf.vao);
 
     // setup VBOs
-    glGenBuffers(m_buf.vbos.size(), m_buf.vbos.data());
-    vector<int> elem_sizes = {
-      sizeof(MorphNode().node_type),
-      sizeof(MorphNode().pos),
-      sizeof(MorphNode().neighbors),
-      sizeof(MorphNode().faces)
+    // each tuple is {sizeof element, components per element,
+    // internal format of component, is integer format}
+    vector<tuple<int, int, GLenum, bool>> vbo_params = {
+      {sizeof(MorphNode().node_type), 1, GL_INT, true},
+      {sizeof(MorphNode().pos), 3, GL_FLOAT, false},
+      {sizeof(MorphNode().neighbors), 4, GL_INT, true},
+      {sizeof(MorphNode().faces), 4, GL_INT, true}
     };
+    glGenBuffers(m_buf.vbos.size(), m_buf.vbos.data());
     for (int i = 0; i < m_buf.vbos.size(); ++i) {
+      auto& params = vbo_params[i];
       glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbos[i]);
       glBufferData(GL_ARRAY_BUFFER,
-          MAX_NUM_MORPH_NODES * elem_sizes[i], nullptr, GL_DYNAMIC_COPY);
-    }
-
-    // setup attributes
-    glVertexAttribIPointer(
-        m_state.node_attribs[BUF_NODE_TYPE], 1, GL_INT, 0, nullptr);
-    glVertexAttribPointer(
-        m_state.node_attribs[BUF_POS], 3, GL_FLOAT, GL_FALSE, 0, nullptr);
-    glVertexAttribIPointer(
-        m_state.node_attribs[BUF_NEIGHBORS], 4, GL_INT, 0, nullptr);
-    glVertexAttribIPointer(
-        m_state.node_attribs[BUF_FACES], 4, GL_INT, 0, nullptr);
-    for (int i = 0; i < m_state.node_attribs.size(); ++i) {
+          MAX_NUM_MORPH_NODES * get<0>(params), nullptr, GL_DYNAMIC_COPY);
+      if (get<3>(params)) {
+        glVertexAttribIPointer(m_state.node_attribs[i],
+            get<1>(params), get<2>(params), 0, nullptr);
+      } else {
+        glVertexAttribPointer(m_state.node_attribs[i],
+            get<1>(params), get<2>(params), GL_FALSE, 0, nullptr);
+      }
       glEnableVertexAttribArray(m_state.node_attribs[i]);
     }
 
@@ -711,9 +711,8 @@ void set_initial_sim_data(GraphicsState& g_state) {
 
   MorphBuffer& m_buf = g_state.morph_state.buffers[0];
 
-  // TODO
-  //vector<MorphNode> nodes = gen_morph_data();
-  vector<MorphNode> nodes = gen_sample_data();
+  vector<MorphNode> nodes = gen_morph_data();
+  //vector<MorphNode> nodes = gen_sample_data();
   MorphNodes node_vecs(nodes);
 
   // log nodes
@@ -801,14 +800,14 @@ void render_frame(GraphicsState& g_state) {
   glUniformMatrix4fv(r_state.unif_mv_matrix, 1, 0, &mv_matrix[0][0]);
   glUniformMatrix4fv(r_state.unif_proj_matrix, 1, 0, &proj_matrix[0][0]);
 
-  glBindVertexArray(r_state.vao);
   //set_sample_render_data(r_state);
 
+  glBindVertexArray(r_state.vao);
   glPointSize(10.0f);
 
   if (g_state.render_faces) {
     glUniform1i(r_state.unif_debug_render, 0);
-    // TODO - it's already bound, but it's good form to bind the index array
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
     glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
   }
   vec3 debug_col(1.0,0.0,0.0);
@@ -816,6 +815,7 @@ void render_frame(GraphicsState& g_state) {
     glUniform1i(r_state.unif_debug_render, 1);
     glUniform3fv(r_state.unif_debug_color, 1, &debug_col[0]);
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
     glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
   }
