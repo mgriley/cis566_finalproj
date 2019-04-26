@@ -97,6 +97,7 @@ enum MorphNodeType {
 struct MorphNode {
   int node_type;
   vec3 pos;
+  // in order of: upper, lower, right, left
   ivec4 neighbors;
   ivec4 faces;
 
@@ -203,13 +204,15 @@ struct MorphProgram {
   string name;
   GLuint gl_handle;
   array<GLint, MORPH_BUF_COUNT> unif_samplers;
+  GLint unif_iter_num;
 
   MorphProgram(string name);
 };
 
 MorphProgram::MorphProgram(string name) :
   name(name),
-  gl_handle(-1)
+  gl_handle(-1),
+  unif_iter_num(-1)
 {
 }
 
@@ -382,8 +385,6 @@ GLuint setup_program(string prog_name,
   }
 
   glLinkProgram(program);
-  glValidateProgram(program);
-  log_program_info_logs(prog_name + ", program log", program);
 
   glDeleteShader(vertex_shader);
   glDeleteShader(fragment_shader);
@@ -463,12 +464,19 @@ MorphProgram init_morph_program(const char* prog_name,
   
   // Note: we do not need to get the input attribute locations
   // b/c they are explicit in each program
-  
+
+  // setup uniforms
+  glUseProgram(prog.gl_handle);
+  prog.unif_iter_num = glGetUniformLocation(
+      prog.gl_handle, "iter_num");
+  if (prog.unif_iter_num == -1) {
+    printf("%s: WARNING iter_num is -1\n", prog_name);
+  }
+
   // setup texture buffer samplers
   vector<const char*> unif_sampler_names = {
     "node_type_buf", "pos_buf", "neighbors_buf", "faces_buf"
   };
-  glUseProgram(prog.gl_handle);
   for (int i = 0; i < prog.unif_samplers.size(); ++i) {
     prog.unif_samplers[i] = glGetUniformLocation(
         prog.gl_handle, unif_sampler_names[i]);
@@ -479,7 +487,8 @@ MorphProgram init_morph_program(const char* prog_name,
       // for the ith member of the MorphNode struct)
       glUniform1i(prog.unif_samplers[i], i);
     } else {
-      printf("WARNING sampler is -1: %s\n", unif_sampler_names[i]);
+      printf("%s: WARNING sampler is -1: %s\n", prog_name,
+          unif_sampler_names[i]);
     }
   }  
   return prog;
@@ -491,8 +500,8 @@ void init_morph_state(GraphicsState& g_state) {
   // setup all of the morph programs
   // each pair is {program name, program src}
   vector<pair<const char*, const char*>> programs = {
-    {"dummy", MORPH_DUMMY_VERTEX_SRC},
-    {"basic", MORPH_BASIC_VERTEX_SRC}
+    {"basic", MORPH_BASIC_VERTEX_SRC},
+    //{"dummy", MORPH_DUMMY_VERTEX_SRC}
   };
   for (auto& elem : programs) {
     MorphProgram prog = init_morph_program(elem.first, elem.second);
@@ -622,8 +631,12 @@ void generate_render_data(GraphicsState& g_state) {
         int node_index = node.neighbors[j];
         face_nodes.push_back(node_vecs.node_at(node_index));
       }
-      // TODO - calc the normal from 3 positions
-      vec3 nor(0.0,1.0,0.0);
+      // calc the normal from the face positions
+      // TODO - normals are acting weird
+      vec3 pos_a = face_nodes[0].pos;
+      vec3 pos_b = face_nodes[1].pos;
+      vec3 pos_c = face_nodes[3].pos;
+      vec3 nor = normalize(cross(pos_b - pos_a, pos_c - pos_a));
       for (auto& node : face_nodes) {
         Vertex vertex;
         vertex.pos = node.pos;
@@ -789,7 +802,12 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
   MorphState& m_state = g_state.morph_state;
 
   MorphProgram& m_prog = m_state.programs[m_state.cur_prog_index];
+
   glUseProgram(m_prog.gl_handle);
+  glValidateProgram(m_prog.gl_handle);
+  log_program_info_logs(m_prog.name + ", validate program log",
+      m_prog.gl_handle);
+
   glEnable(GL_RASTERIZER_DISCARD);
 
   // perform double-buffered iterations
@@ -798,6 +816,9 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
   for (int i = 0; i < num_iters; ++i) {
     MorphBuffer& cur_buf = m_state.buffers[i & 1];
     MorphBuffer& next_buf = m_state.buffers[(i + 1) & 1];
+
+    // set uniforms
+    glUniform1i(m_prog.unif_iter_num, i);
 
     // setup texture buffers and transform feedback buffers
     glBindVertexArray(cur_buf.vao);
@@ -1035,7 +1056,9 @@ void run_app() {
     ImGui::Combo("program", &g_state.morph_state.cur_prog_index,
         prog_names.data(), prog_names.size());
     ImGui::InputInt("num iters", &controls.num_iters);
+    controls.num_iters = std::max(controls.num_iters, 0);
     ImGui::InputInt("AxA samples", &controls.num_zygote_samples);
+    controls.num_zygote_samples = std::max(controls.num_zygote_samples, 0);
     if (ImGui::Button("run simulation")) {
       run_simulation_pipeline(g_state);  
     }
