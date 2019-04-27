@@ -52,8 +52,13 @@ string ivec4_str(ivec4 v) {
 
 struct Camera {
   mat4 cam_to_world;
+
   Camera();
   void set_view(vec3 eye, vec3 target);
+  vec3 pos() const;
+  vec3 right() const;
+  vec3 up() const;
+  vec3 forward() const;
 };
 
 Camera::Camera() {
@@ -69,6 +74,22 @@ void Camera::set_view(vec3 eye, vec3 target) {
   cam_to_world[1] = vec4(up, 0.0);
   cam_to_world[2] = vec4(forward, 0.0);
   cam_to_world[3] = vec4(eye, 1.0);
+}
+
+vec3 Camera::pos() const {
+  return vec3(cam_to_world[3]);
+}
+
+vec3 Camera::right() const {
+  return vec3(cam_to_world[0]);
+}
+
+vec3 Camera::up() const {
+  return vec3(cam_to_world[1]);
+}
+
+vec3 Camera::forward() const {
+  return vec3(cam_to_world[2]);
 }
 
 // For use in the interleaved render buffer
@@ -251,6 +272,9 @@ struct Controls {
   int num_zygote_samples;
   int num_iters;
 
+  bool cam_spherical_mode;
+  Camera zoom_to_fit_cam;
+
   Controls();
 };
 
@@ -262,7 +286,8 @@ Controls::Controls() :
   log_output_nodes(false),
   log_render_data(false),
   num_zygote_samples(10),
-  num_iters(0)
+  num_iters(0),
+  cam_spherical_mode(true)
 {
 }
 
@@ -608,7 +633,7 @@ MorphNodes read_nodes_from_vbos(MorphState& m_state) {
   return node_vecs;
 }
 
-// Helper for generate_render_data
+// Helper for gen_render_data
 // The node indices must be given in CCW winding order
 void add_triangle_face(MorphNodes& node_vecs,
     vector<Vertex>& vertices, vector<GLuint>& indices,
@@ -639,10 +664,8 @@ void add_triangle_face(MorphNodes& node_vecs,
 }
 
 // Use the simulation data to generate render data
-void generate_render_data(GraphicsState& g_state) {  
+void gen_render_data(GraphicsState& g_state, MorphNodes& node_vecs) {  
   MorphState& m_state = g_state.morph_state;
-
-  MorphNodes node_vecs = read_nodes_from_vbos(m_state);
     
   if (g_state.controls.log_output_nodes) {
     // log nodes
@@ -832,11 +855,26 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
   log_gl_errors("done simulation");
 }
 
+void update_ui_for_output(GraphicsState& g_state, MorphNodes& node_vecs) {
+  vec3 furthest_pos(0.0);
+  for (int i = 0; i < node_vecs.pos_vec.size(); ++i) {
+    if (length(node_vecs.pos_vec[i]) > length(furthest_pos)) {
+      furthest_pos = node_vecs.pos_vec[i];
+    }
+  }
+  Camera far_cam;
+  far_cam.set_view(
+      2.0f*length(furthest_pos)*normalize(vec3(0.0,1.0,-2.0)), vec3(0.0));
+  g_state.controls.zoom_to_fit_cam = far_cam;
+}
+
 void run_simulation_pipeline(GraphicsState& g_state) {
   log_gl_errors("starting sim pipeline\n");
   set_initial_sim_data(g_state);
   run_simulation(g_state, g_state.controls.num_iters);
-  generate_render_data(g_state);
+  MorphNodes node_vecs = read_nodes_from_vbos(g_state.morph_state);
+  update_ui_for_output(g_state, node_vecs);
+  gen_render_data(g_state, node_vecs);
   log_gl_errors("ending sim pipeline\n");
 }
 
@@ -864,10 +902,7 @@ void render_frame(GraphicsState& g_state) {
   // set uniforms
   float aspect_ratio = r_state.fb_width / (float) r_state.fb_height;
   Camera& cam = g_state.camera;
-  vec3 eye = vec3(cam.cam_to_world[3]);
-  vec3 forward = vec3(cam.cam_to_world[2]);
-  vec3 up = vec3(cam.cam_to_world[1]);
-  mat4 mv_matrix = glm::lookAt(eye, eye + forward, up);
+  mat4 mv_matrix = glm::lookAt(cam.pos(), cam.pos() + cam.forward(), cam.up());
 
   mat4 proj_matrix = glm::perspective((float) M_PI / 4.0f, aspect_ratio, 1.0f, 10000.0f);
   glUniformMatrix4fv(r_state.unif_mv_matrix, 1, 0, &mv_matrix[0][0]);
@@ -904,14 +939,21 @@ void render_frame(GraphicsState& g_state) {
 void handle_key_event(GLFWwindow* win, int key, int scancode,
     int action, int mods) {
   GraphicsState* g_state = static_cast<GraphicsState*>(glfwGetWindowUserPointer(win));
-  //printf("key event\n");
+  Controls& controls = g_state->controls;
+
   if (key == GLFW_KEY_R && action == GLFW_PRESS) {
     // reset camera pos
     g_state->camera = Camera();
   }
+  if (key == GLFW_KEY_F && action == GLFW_PRESS) {
+    controls.cam_spherical_mode = !controls.cam_spherical_mode;
+  }
+  if (key == GLFW_KEY_T && action == GLFW_PRESS) {
+    g_state->camera = controls.zoom_to_fit_cam;
+  }
 }
 
-void update_camera(GLFWwindow* win, Camera& cam) {
+void update_camera_cartesian(GLFWwindow* win, Controls& controls, Camera& cam) {
   vec3 delta(0.0);
   if (glfwGetKey(win, GLFW_KEY_W)) {
     delta += vec3(0.0,0.0,1.0);
@@ -947,6 +989,53 @@ void update_camera(GLFWwindow* win, Camera& cam) {
   }
   
   cam.cam_to_world = cam.cam_to_world * rot_mat * trans_mat;
+}
+
+void update_camera_spherical(GLFWwindow* win, Controls& controls, Camera& cam) {
+  vec3 eye = cam.pos();
+  float cur_r = length(eye);
+  float h_angle = atan2(eye.z, eye.x);
+  float v_angle = atan2(length(vec2(eye.x, eye.z)), eye.y);
+
+  float delta_r = 0.0;
+  float delta_h_angle = 0.0;
+  float delta_v_angle = 0.0;
+  if (glfwGetKey(win, GLFW_KEY_W)) {
+    delta_r = -1.0;
+  }
+  if (glfwGetKey(win, GLFW_KEY_A)) {
+    delta_h_angle = 1.0;
+  }
+  if (glfwGetKey(win, GLFW_KEY_S)) {
+    delta_r = 1.0;
+  }
+  if (glfwGetKey(win, GLFW_KEY_D)) {
+    delta_h_angle = -1.0;
+  }
+  if (glfwGetKey(win, GLFW_KEY_Q)) {
+    delta_v_angle = 1.0;
+  }
+  if (glfwGetKey(win, GLFW_KEY_E)) {
+    delta_v_angle = -1.0;
+  }
+  float new_r = cur_r + 30.0f * delta_r * 0.017;
+  float new_h_angle = h_angle + M_PI / 2.0 * delta_h_angle * 0.017;
+  float new_v_angle = v_angle + M_PI / 2.0 * delta_v_angle * 0.017;
+
+  vec3 pos = new_r * vec3(
+      cos(new_h_angle) * sin(new_v_angle),
+      cos(new_v_angle),
+      sin(new_h_angle) * sin(new_v_angle)
+      );
+  cam.set_view(pos, vec3(0.0));
+}
+
+void update_camera(GLFWwindow* win, Controls& controls, Camera& cam) {
+  if (controls.cam_spherical_mode) {
+    update_camera_spherical(win, controls, cam);
+  } else {
+    update_camera_cartesian(win, controls, cam);
+  }
 }
 
 void run_app() {
@@ -1017,7 +1106,7 @@ void run_app() {
     }
 
     glfwPollEvents();
-    update_camera(window, g_state.camera);
+    update_camera(window, g_state.controls, g_state.camera);
 
     // the screen appears black on mojave until a resize occurs
     if (requires_mac_mojave_fix) {
@@ -1033,12 +1122,19 @@ void run_app() {
     ImGui::Text("fps: %d", fps_stat);
 
     Controls& controls = g_state.controls;
+
+    ImGui::Separator();
+    ImGui::Text("camera:");
+    ImGui::Text("eye: %s", vec3_str(g_state.camera.pos()).c_str());
+    ImGui::Text("forward: %s", vec3_str(g_state.camera.forward()).c_str());
+    ImGui::Text("mode: %s", controls.cam_spherical_mode ? "spherical" : "cartesian");
+
     ImGui::Separator();
     ImGui::Text("render controls:");
     ImGui::Checkbox("render faces", &controls.render_faces);
     ImGui::Checkbox("render points", &controls.render_points);
     ImGui::Checkbox("render wireframe", &controls.render_wireframe);
-
+    
     ImGui::Separator();
     ImGui::Text("simulation controls:");
     ImGui::Checkbox("log input nodes", &controls.log_input_nodes);
@@ -1069,12 +1165,12 @@ void run_app() {
     glClearColor(1, 1, 1, 1);
     glClearDepth(1.0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     g_state.render_state.fb_width = fb_width;
     g_state.render_state.fb_height = fb_height;
-
     render_frame(g_state);
+
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     
     glfwSwapBuffers(window);
   }
