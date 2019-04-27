@@ -501,7 +501,7 @@ void init_morph_state(GraphicsState& g_state) {
   // each pair is {program name, program src}
   vector<pair<const char*, const char*>> programs = {
     {"basic", MORPH_BASIC_VERTEX_SRC},
-    //{"dummy", MORPH_DUMMY_VERTEX_SRC}
+    {"dummy", MORPH_DUMMY_VERTEX_SRC}
   };
   for (auto& elem : programs) {
     MorphProgram prog = init_morph_program(elem.first, elem.second);
@@ -706,6 +706,11 @@ vec3 gen_sphere(vec2 unit) {
 
 vec3 gen_square(vec2 unit) {
   return vec3(unit, 0);
+}
+
+vec3 gen_plane(vec2 unit) {
+  vec2 plane_pos = 10.0f * (2.0f * (unit - 0.5f));
+  return vec3(plane_pos, 0.0f);
 }
 
 // Modulo but wraps -ve values to the +ve range, giving a positive result
