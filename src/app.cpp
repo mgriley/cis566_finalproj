@@ -709,7 +709,7 @@ vec3 gen_square(vec2 unit) {
 }
 
 vec3 gen_plane(vec2 unit) {
-  vec2 plane_pos = 10.0f * (2.0f * (unit - 0.5f));
+  vec2 plane_pos = 1.0f * (2.0f * (unit - 0.5f));
   return vec3(plane_pos, 0.0f);
 }
 
@@ -720,11 +720,88 @@ inline int pos_mod(int i, int n) {
 }
 
 // coord to vertex index
-int coord_to_index(ivec2 coord, ivec2 samples) {
+int coord_to_index_old(ivec2 coord, ivec2 samples) {
   return pos_mod(coord[0], samples[0]) + samples[0] * pos_mod(coord[1], samples[1]);
 }
 
+// Helper for gen_morph_data
+// returns -1 if the coord is outside the plane
+int coord_to_index(ivec2 coord, ivec2 samples) {
+  if ((0 <= coord[0] && coord[0] < samples[0]) &&
+      (0 <= coord[1] && coord[1] < samples[1])) {
+    return coord[0] % samples[0] + samples[0] * (coord[1] % samples[1]);
+  } else {
+    return -1;
+  }
+}
+
+// Helper for gen_morph_data
+// coord is the coord of the bot-left vertex of the face
+// returns -1 if no such face
+int face_index(ivec2 coord, ivec2 samples, int index_offset) {
+  if ((0 <= coord[0] && coord[0] < samples[0] - 1) &&
+      (0 <= coord[1] && coord[1] < samples[1] - 1)) {
+    int base_index = coord[0] % samples[0] + samples[0] * (coord[1] % samples[1]);
+    return base_index + index_offset;
+  } else {
+    return -1;
+  }
+}
+
 vector<MorphNode> gen_morph_data(ivec2 samples) {
+  // Note that the full node array will be [vertex_nodes..., face_nodes...],
+  // so we offset the face indices with the num of vertices
+  int num_vertices = samples[0] * samples[1];
+  vector<MorphNode> vertex_nodes;
+  vector<MorphNode> face_nodes;
+  for (int y = 0; y < samples[1]; ++y) {
+    for (int x = 0; x < samples[0]; ++x) {
+      ivec2 coord(x, y);
+      vec3 pos = gen_plane(vec2(coord) / vec2(samples - 1));
+
+      int upper_neighbor = coord_to_index(coord + ivec2(0, 1), samples);
+      int lower_neighbor = coord_to_index(coord + ivec2(0, -1), samples);
+      int right_neighbor = coord_to_index(coord + ivec2(1, 0), samples);
+      int left_neighbor = coord_to_index(coord + ivec2(-1, 0), samples);
+      ivec4 neighbors(upper_neighbor, lower_neighbor, right_neighbor, left_neighbor);
+
+      // the index of the face is the index of the vert at its bot-left corner.
+      // face i is the face to the right of the edge directed from this vert to neighbor i
+      int bot_left_face = face_index(coord - ivec2(1, 1), samples, num_vertices);
+      int bot_right_face = face_index(coord - ivec2(0, 1), samples, num_vertices);
+      int top_left_face = face_index(coord - ivec2(1, 0), samples, num_vertices);
+      int top_right_face = face_index(coord, samples, num_vertices);
+      ivec4 faces(top_right_face, bot_left_face, bot_right_face, top_left_face);
+
+      MorphNode vert_node;
+      vert_node.node_type = TYPE_VERTEX;
+      vert_node.pos = pos;
+      vert_node.neighbors = neighbors;
+      vert_node.faces = faces;
+      vertex_nodes.push_back(vert_node);
+
+      // record the face quad if applicable. We record a face when processing
+      // the vertex in bot-left corner
+      if (x < samples[0] - 1 && y < samples[1] - 1) {
+        int patch_a = coord_to_index(coord, samples);
+        int patch_b = coord_to_index(coord + ivec2(1, 0), samples);
+        int patch_c = coord_to_index(coord + ivec2(1, 1), samples);
+        int patch_d = coord_to_index(coord + ivec2(0, 1), samples);
+        // we store the face's (quad's) verts in the neighbors vec, CCW winding order
+        // MorphNode is conceptually a union. The other fields are unused with face type
+        MorphNode face_node;
+        face_node.node_type = TYPE_FACE;
+        face_node.neighbors = ivec4(patch_a, patch_b, patch_c, patch_d);
+        face_nodes.push_back(face_node);
+      }
+    }
+  }
+  vertex_nodes.insert(vertex_nodes.end(), face_nodes.begin(), face_nodes.end());
+  return vertex_nodes;
+}
+
+/*
+vector<MorphNode> gen_morph_data_old(ivec2 samples) {
   vector<MorphNode> vertex_nodes;
   vector<MorphNode> face_nodes;
   for (int y = 0; y < samples[1]; ++y) {
@@ -813,6 +890,7 @@ vector<MorphNode> gen_sample_data() {
   nodes[2].pos = vec3(0.0,1.0,0.0);
   return nodes;
 }
+*/
 
 vector<MorphNode> gen_sample_square() {
   vector<MorphNode> nodes = {
