@@ -34,7 +34,7 @@ in vec4 fs_col;
 out vec4 color;
 
 void main() {
-  vec3 world_light_dir = normalize(vec3(0,0,1));
+  vec3 world_light_dir = normalize(vec3(1.0,1.0,1.0));
   vec3 world_nor = normalize(fs_nor);
   float df = clamp(dot(world_nor, world_light_dir), 0.0, 1.0);
   vec3 col = (df + 0.2) * fs_col.rgb;

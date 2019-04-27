@@ -18,6 +18,8 @@ uniform isamplerBuffer faces_buf;
 
 out int out_node_type;
 out vec3 out_pos;
+out vec3 out_vel;
+out vec4 out_data;
 out ivec4 out_neighbors;
 out ivec4 out_faces;
 
@@ -37,11 +39,14 @@ void handle_vert() {
 
   vec3 new_pos;
   //new_pos = mid;
-  new_pos = pos + face_normal(faces[0]);
+  //new_pos = pos + face_normal(faces[0]);
   //new_pos = pos + normalize(right_pos - pos) * 1.0;
+  new_pos = pos + vec3(1.0,0.0,0.0);
   
   out_node_type = node_type;
   out_pos = new_pos;
+  out_vel = vel;
+  out_data = data;
   out_neighbors = neighbors;
   out_faces = faces;
 }
@@ -49,6 +54,8 @@ void handle_vert() {
 void handle_face() {
   out_node_type = node_type;
   out_pos = pos;
+  out_vel = vel;
+  out_data = data;
   out_neighbors = neighbors;
   out_faces = faces;
 }
