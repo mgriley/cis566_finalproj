@@ -76,7 +76,14 @@ struct Vertex {
   vec3 pos;
   vec3 nor;
   vec4 col;
+
+  Vertex(vec3 pos, vec3 nor, vec4 col);
 };
+
+Vertex::Vertex(vec3 pos, vec3 nor, vec4 col) :
+  pos(pos), nor(nor), col(col)
+{
+}
 
 struct RenderState {
   GLuint vao;
@@ -99,54 +106,39 @@ struct RenderState {
   GLint col_attrib;
 };
 
-// For use in the interleaved transform feedback buffer
-enum MorphNodeType {
-  TYPE_VERTEX = 0,
-  TYPE_FACE
-};
-
 struct MorphNode {
-  int node_type;
-  vec3 pos;
-  vec3 vel;
+  vec4 pos;
+  vec4 vel;
+  // in order of: {right, upper, left, lower} wrt surface normal
+  vec4 neighbors;
   vec4 data;
-  // in order of: upper, lower, right, left
-  ivec4 neighbors;
-  ivec4 faces;
 
   MorphNode();
-  MorphNode(int node_type, vec3 pos, vec3 vel, vec4 data,
-      ivec4 neighbors, ivec4 faces);
+  MorphNode(vec4 pos, vec4 vel, vec4 neighbors, vec4 data);
 };
 
 MorphNode::MorphNode():
-  node_type(TYPE_VERTEX),
   pos(0.0),
   vel(0.0),
-  data(0.0),
-  neighbors(-1),
-  faces(-1)
+  neighbors(-1.0),
+  data(0.0)
 {
 }
 
-MorphNode::MorphNode(int node_type, vec3 pos, vec3 vel, vec4 data,
-    ivec4 neighbors, ivec4 faces) :
-  node_type(node_type),
+MorphNode::MorphNode(vec4 pos, vec4 vel,
+    vec4 neighbors, vec4 data) :
   pos(pos),
   vel(vel),
-  data(data),
   neighbors(neighbors),
-  faces(faces)
+  data(data)
 {
 }
 
 struct MorphNodes {
-  vector<int> node_type_vec;
-  vector<vec3> pos_vec;
-  vector<vec3> vel_vec;
+  vector<vec4> pos_vec;
+  vector<vec4> vel_vec;
+  vector<vec4> neighbors_vec;
   vector<vec4> data_vec;
-  vector<ivec4> neighbors_vec;
-  vector<ivec4> faces_vec;
 
   MorphNodes(size_t num_nodes);
   MorphNodes(vector<MorphNode> const& nodes);
@@ -154,74 +146,49 @@ struct MorphNodes {
 };
 
 MorphNodes::MorphNodes(size_t num_nodes) :
-  node_type_vec(num_nodes),
   pos_vec(num_nodes),
   vel_vec(num_nodes),
   neighbors_vec(num_nodes),
-  faces_vec(num_nodes)
+  data_vec(num_nodes)
 {
 }
 
 MorphNodes::MorphNodes(vector<MorphNode> const& nodes) :
-  node_type_vec(nodes.size()),
   pos_vec(nodes.size()),
   vel_vec(nodes.size()),
-  data_vec(nodes.size()),
   neighbors_vec(nodes.size()),
-  faces_vec(nodes.size())
+  data_vec(nodes.size())
 {
   for (int i = 0; i < nodes.size(); ++i) {
     MorphNode const& node = nodes[i];
-    node_type_vec[i] = node.node_type;
     pos_vec[i] = node.pos;
     vel_vec[i] = node.vel;
-    data_vec[i] = node.data;
     neighbors_vec[i] = node.neighbors;
-    faces_vec[i] = node.faces;
+    data_vec[i] = node.data;
   }
 }
 
 MorphNode MorphNodes::node_at(size_t i) const {
-  return MorphNode(node_type_vec[i],
-      pos_vec[i], vel_vec[i], data_vec[i],
-      neighbors_vec[i], faces_vec[i]);
+  return MorphNode(pos_vec[i], vel_vec[i], 
+      neighbors_vec[i], data_vec[i]);
 }
 
 string raw_node_str(MorphNode const& node) {
   array<char, 200> s;
-  sprintf(s.data(), "type: %d pos: %s, vel: %s, data: %s "
-      "neighbors: %s, faces: %s",
-        node.node_type, vec3_str(node.pos).c_str(),
-        vec3_str(node.vel).c_str(),
-        vec4_str(node.data).c_str(),
-        ivec4_str(node.neighbors).c_str(),
-        ivec4_str(node.faces).c_str());
+  sprintf(s.data(), "pos: %s, vel: %s, neighbors: %s, data: %s",
+        vec4_str(node.pos).c_str(),
+        vec4_str(node.vel).c_str(),
+        vec4_str(node.neighbors).c_str(),
+        vec4_str(node.data).c_str());
   return string(s.data());
 }
-
-// a more compact node string
-/*
-string node_str(MorphNode const& node) {
-  array<char, 200> s;
-  if (node.node_type == TYPE_VERTEX) {
-    sprintf(s.data(), "VERT pos: %s, neighbors: %s, faces: %s",
-        vec3_str(node.pos).c_str(), ivec4_str(node.neighbors).c_str(),
-        ivec4_str(node.faces).c_str());
-  } else {
-    sprintf(s.data(), "FACE verts: %s", ivec4_str(node.neighbors).c_str());
-  }
-  return string(s.data());
-}
-*/
 
 // These serve as indices into the MorphBuffer vbos and tex_buf arrays
 enum MorphBuffers {
-  BUF_NODE_TYPE = 0,
-  BUF_POS,
+  BUF_POS = 0,
   BUF_VEL,
-  BUF_DATA,
   BUF_NEIGHBORS,
-  BUF_FACES,
+  BUF_DATA,
 
   MORPH_BUF_COUNT
 };
@@ -414,12 +381,10 @@ GLuint setup_program(string prog_name,
   log_gl_errors("before varyings, setup program");
   if (is_morph_prog) {
     vector<const char*> varyings = {
-      "out_node_type",
       "out_pos",
-      //"out_vel",
-      "out_data",
+      "out_vel",
       "out_neighbors",
-      "out_faces"
+      "out_data"
     };
     glTransformFeedbackVaryings(program, varyings.size(),
         varyings.data(), GL_SEPARATE_ATTRIBS);
@@ -516,8 +481,7 @@ MorphProgram init_morph_program(const char* prog_name,
 
   // setup texture buffer samplers
   vector<const char*> unif_sampler_names = {
-    "node_type_buf", "pos_buf", "vel_buf", "data_buf",
-    "neighbors_buf", "faces_buf"
+    "pos_buf", "vel_buf", "neighbors_buf", "data_buf"
   };
   for (int i = 0; i < prog.unif_samplers.size(); ++i) {
     prog.unif_samplers[i] = glGetUniformLocation(
@@ -561,12 +525,10 @@ void init_morph_state(GraphicsState& g_state) {
     // each tuple is {sizeof element, components per element,
     // internal format of component, is integer format}
     vector<tuple<int, int, GLenum, bool>> vbo_params = {
-      {sizeof(int), 1, GL_INT, true},
-      {sizeof(vec3), 3, GL_FLOAT, false},
-      {sizeof(vec3), 3, GL_FLOAT, false},
       {sizeof(vec4), 4, GL_FLOAT, false},
-      {sizeof(ivec4), 4, GL_INT, true},
-      {sizeof(ivec4), 4, GL_INT, true}
+      {sizeof(vec4), 4, GL_FLOAT, false},
+      {sizeof(vec4), 4, GL_FLOAT, false},
+      {sizeof(vec4), 4, GL_FLOAT, false},
     };
     glGenBuffers(m_buf.vbos.size(), m_buf.vbos.data());
     for (int i = 0; i < m_buf.vbos.size(); ++i) {
@@ -590,8 +552,7 @@ void init_morph_state(GraphicsState& g_state) {
     // setup texture buffers
     glGenTextures(m_buf.tex_bufs.size(), m_buf.tex_bufs.data());
     vector<GLenum> internal_formats = {
-      GL_R32I, GL_RGB32F, GL_RGB32F, GL_RGBA32F,
-      GL_RGBA32I, GL_RGBA32I
+      GL_RGBA32F, GL_RGBA32F, GL_RGBA32F, GL_RGBA32F
     };
     for (int i = 0; i < m_buf.tex_bufs.size(); ++i) {
       glBindTexture(GL_TEXTURE_BUFFER, m_buf.tex_bufs[i]);
@@ -613,14 +574,12 @@ void write_nodes_to_vbos(MorphBuffer& m_buf, MorphNodes& node_vecs) {
 
   // each pair is {element size, data pointer}
   vector<pair<int, GLvoid*>> data_params = {
-    {sizeof(int), node_vecs.node_type_vec.data()},
-    {sizeof(vec3), node_vecs.pos_vec.data()},
-    {sizeof(vec3), node_vecs.vel_vec.data()},
+    {sizeof(vec4), node_vecs.pos_vec.data()},
+    {sizeof(vec4), node_vecs.vel_vec.data()},
+    {sizeof(vec4), node_vecs.neighbors_vec.data()},
     {sizeof(vec4), node_vecs.data_vec.data()},
-    {sizeof(ivec4), node_vecs.neighbors_vec.data()},
-    {sizeof(ivec4), node_vecs.faces_vec.data()}
   };
-  int num_nodes = node_vecs.node_type_vec.size();
+  int num_nodes = node_vecs.pos_vec.size();
   glBindVertexArray(m_buf.vao);
   for (int i = 0; i < m_buf.vbos.size(); ++i) {
     glBindBuffer(GL_ARRAY_BUFFER, m_buf.vbos[i]);
@@ -635,12 +594,10 @@ MorphNodes read_nodes_from_vbos(MorphState& m_state) {
 
   // each pair is {element size, target array}
   vector<pair<int, GLvoid*>> data_params = {
-    {sizeof(int), node_vecs.node_type_vec.data()},
-    {sizeof(vec3), node_vecs.pos_vec.data()},
-    {sizeof(vec3), node_vecs.vel_vec.data()},
+    {sizeof(vec4), node_vecs.pos_vec.data()},
+    {sizeof(vec4), node_vecs.vel_vec.data()},
+    {sizeof(vec4), node_vecs.neighbors_vec.data()},
     {sizeof(vec4), node_vecs.data_vec.data()},
-    {sizeof(ivec4), node_vecs.neighbors_vec.data()},
-    {sizeof(ivec4), node_vecs.faces_vec.data()}
   };
   glBindVertexArray(target_buf.vao);
   for (int i = 0; i < target_buf.vbos.size(); ++i) {
@@ -651,25 +608,26 @@ MorphNodes read_nodes_from_vbos(MorphState& m_state) {
   return node_vecs;
 }
 
-// helper for generate_render_data
-// The nodes must be given in CCW winding order
-void add_triangle_face(vector<Vertex>& vertices, vector<GLuint>& indices,
-    MorphNode& node_a, MorphNode& node_b, MorphNode& node_c) {
+// Helper for generate_render_data
+// The node indices must be given in CCW winding order
+void add_triangle_face(MorphNodes& node_vecs,
+    vector<Vertex>& vertices, vector<GLuint>& indices,
+    int i_a, int i_b, int i_c) {
   
   // calc the normal from the face positions.
-  vec3 nor = cross(node_b.pos - node_a.pos, node_c.pos - node_a.pos);
+  vec3 p_a = vec3(node_vecs.pos_vec[i_a]);
+  vec3 p_b = vec3(node_vecs.pos_vec[i_b]);
+  vec3 p_c = vec3(node_vecs.pos_vec[i_c]);
+  vec3 nor = cross(p_b - p_a, p_c - p_a);
   if (dot(nor, nor) < 1e-12) {
     // the face has no area, so skip it
     return;
   }
   nor = normalize(nor);
   GLuint index_offset = vertices.size();
-  vector<MorphNode> nodes = {node_a, node_b, node_c};
-  for (auto& node : nodes) {
-    Vertex vertex;
-    vertex.pos = node.pos;
-    vertex.nor = nor;
-    vertex.col = vec4(0.0,1.0,0.0,1.0);
+  vector<vec3> positions = {p_a, p_b, p_c};
+  for (vec3 pos : positions) {
+    Vertex vertex(pos, nor, vec4(0.0,1.0,0.0,1.0));
     vertices.push_back(vertex);
   }
   // add the new indices
@@ -689,7 +647,7 @@ void generate_render_data(GraphicsState& g_state) {
   if (g_state.controls.log_output_nodes) {
     // log nodes
     printf("output nodes (%d):\n", m_state.num_nodes); 
-    for (int i = 0; i < node_vecs.node_type_vec.size(); ++i) {
+    for (int i = 0; i < node_vecs.pos_vec.size(); ++i) {
       MorphNode node = node_vecs.node_at(i);
       printf("%4d %s\n", i, raw_node_str(node).c_str());
     }
@@ -700,25 +658,21 @@ void generate_render_data(GraphicsState& g_state) {
   
   vector<Vertex> vertices;
   vector<GLuint> indices;
-
-  for (int i = 0; i < node_vecs.node_type_vec.size(); ++i) {
-    MorphNode node = node_vecs.node_at(i);
-    if (node.node_type == TYPE_FACE) {
-      vector<MorphNode> face_nodes;
-      for (int j = 0; j < 4; ++j) {
-        int node_index = node.neighbors[j];
-        face_nodes.push_back(node_vecs.node_at(node_index));
-      }
-      // generate 2 triangle faces for each quad
-      add_triangle_face(vertices, indices,
-          face_nodes[0], face_nodes[1], face_nodes[2]);
-      add_triangle_face(vertices, indices,
-          face_nodes[0], face_nodes[2], face_nodes[3]);
+  for (int i = 0; i < node_vecs.pos_vec.size(); ++i) {
+    vec4 neighbors = node_vecs.neighbors_vec[i];
+    int i_a = i;
+    int i_b = (int) neighbors[0];
+    int i_c = (int) node_vecs.neighbors_vec[i_b][1];
+    int i_d = (int) neighbors[1];
+    if (i_b != -1 && i_d != -1) {
+      assert(i_c != -1);
+      add_triangle_face(node_vecs, vertices, indices, i_a, i_b, i_c);
+      add_triangle_face(node_vecs, vertices, indices, i_a, i_c, i_d);
     }
   }
 
   if (g_state.controls.log_render_data) {
-    // log data
+    // log render data
     printf("vertex data (%lu):\n", vertices.size());
     for (int i = 0; i < vertices.size(); ++i) {
       Vertex& v = vertices[i];
@@ -774,25 +728,9 @@ int coord_to_index(ivec2 coord, ivec2 samples) {
   }
 }
 
-// Helper for gen_morph_data
-// coord is the coord of the bot-left vertex of the face
-// returns -1 if no such face
-int face_index(ivec2 coord, ivec2 samples, int index_offset) {
-  if ((0 <= coord[0] && coord[0] < samples[0] - 1) &&
-      (0 <= coord[1] && coord[1] < samples[1] - 1)) {
-    int base_index = coord[0] % samples[0] + samples[0] * (coord[1] % samples[1]);
-    return base_index + index_offset;
-  } else {
-    return -1;
-  }
-}
-
 vector<MorphNode> gen_morph_data(ivec2 samples) {
-  // Note that the full node array will be [vertex_nodes..., face_nodes...],
-  // so we offset the face indices with the num of vertices
-  int num_vertices = samples[0] * samples[1];
   vector<MorphNode> vertex_nodes;
-  vector<MorphNode> face_nodes;
+  vertex_nodes.reserve(samples[0] * samples[1]);
   for (int y = 0; y < samples[1]; ++y) {
     for (int x = 0; x < samples[0]; ++x) {
       ivec2 coord(x, y);
@@ -802,50 +740,22 @@ vector<MorphNode> gen_morph_data(ivec2 samples) {
       int lower_neighbor = coord_to_index(coord + ivec2(0, -1), samples);
       int right_neighbor = coord_to_index(coord + ivec2(1, 0), samples);
       int left_neighbor = coord_to_index(coord + ivec2(-1, 0), samples);
-      ivec4 neighbors(upper_neighbor, lower_neighbor, right_neighbor, left_neighbor);
-
-      // the index of the face is the index of the vert at its bot-left corner.
-      // face i is the face to the right of the edge directed from this vert to neighbor i
-      int bot_left_face = face_index(coord - ivec2(1, 1), samples, num_vertices);
-      int bot_right_face = face_index(coord - ivec2(0, 1), samples, num_vertices);
-      int top_left_face = face_index(coord - ivec2(1, 0), samples, num_vertices);
-      int top_right_face = face_index(coord, samples, num_vertices);
-      ivec4 faces(top_right_face, bot_left_face, bot_right_face, top_left_face);
-
-      MorphNode vert_node;
-      vert_node.node_type = TYPE_VERTEX;
-      vert_node.pos = pos;
-      vert_node.neighbors = neighbors;
-      vert_node.faces = faces;
+      vec4 neighbors((float) right_neighbor, (float) upper_neighbor, (float) left_neighbor, (float) lower_neighbor);
+      
+      MorphNode vert_node(vec4(pos, 0.0), vec4(0.0), neighbors, vec4(0.0));
       vertex_nodes.push_back(vert_node);
-
-      // record the face quad if applicable. We record a face when processing
-      // the vertex in bot-left corner
-      if (x < samples[0] - 1 && y < samples[1] - 1) {
-        int patch_a = coord_to_index(coord, samples);
-        int patch_b = coord_to_index(coord + ivec2(1, 0), samples);
-        int patch_c = coord_to_index(coord + ivec2(1, 1), samples);
-        int patch_d = coord_to_index(coord + ivec2(0, 1), samples);
-        // we store the face's (quad's) verts in the neighbors vec, CCW winding order
-        // MorphNode is conceptually a union. The other fields are unused with face type
-        MorphNode face_node;
-        face_node.node_type = TYPE_FACE;
-        face_node.neighbors = ivec4(patch_a, patch_b, patch_c, patch_d);
-        face_nodes.push_back(face_node);
-      }
     }
   }
-  vertex_nodes.insert(vertex_nodes.end(), face_nodes.begin(), face_nodes.end());
   return vertex_nodes;
 }
 
 vector<MorphNode> gen_sample_square() {
   vector<MorphNode> nodes = {
-    MorphNode(0, vec3(-0.5,-0.5,0.0), vec3(0.0), vec4(0.0), ivec4(3,-1,1,-1), ivec4(5,-1,-1,-1)),
-    MorphNode(0, vec3(0.5,-0.5,0.0), vec3(0.0), vec4(0.0), ivec4(2,-1,-1,0), ivec4(-1,-1,-1,5)),
-    MorphNode(0, vec3(0.5,0.5,0.0), vec3(0.0), vec4(0.0), ivec4(0,1,-1,3), ivec4(-1,5,-1,-5)),
-    MorphNode(0, vec3(-0.5,0.5,0.0), vec3(0.0), vec4(0.0), ivec4(-1,0,2,-1), ivec4(-1,-1,5,-1)),
-    MorphNode(1, vec3(0.0), vec3(0.0), vec4(0.0), ivec4(0, 1, 2, 3), ivec4(0))
+    MorphNode(vec4(-0.5,-0.5,0.0,0.0), vec4(0.0), vec4(ivec4(3,-1,1,-1)), vec4(0.0)),
+    MorphNode(vec4(0.5,-0.5,0.0,0.0), vec4(0.0), vec4(ivec4(2,-1,-1,0)), vec4(0.0)),
+    MorphNode(vec4(0.5,0.5,0.0,0.0), vec4(0.0), vec4(ivec4(0,1,-1,3)), vec4(0.0)),
+    MorphNode(vec4(-0.5,0.5,0.0,0.0), vec4(0.0), vec4(ivec4(-1,0,2,-1)), vec4(0.0)),
+    MorphNode(vec4(0.0), vec4(0.0), vec4(ivec4(0, 1, 2, 3)), vec4(0.0))
   };
   return nodes;
 }
@@ -863,7 +773,7 @@ void set_initial_sim_data(GraphicsState& g_state) {
   // log nodes
   if (g_state.controls.log_input_nodes) {
     printf("input nodes:\n");
-    for (int i = 0; i < node_vecs.node_type_vec.size(); ++i) {
+    for (int i = 0; i < node_vecs.pos_vec.size(); ++i) {
       MorphNode node = node_vecs.node_at(i);
       printf("%4d %s\n", i, raw_node_str(node).c_str());
     }
@@ -923,11 +833,11 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
 }
 
 void run_simulation_pipeline(GraphicsState& g_state) {
-  log_gl_errors("starting generation\n");
+  log_gl_errors("starting sim pipeline\n");
   set_initial_sim_data(g_state);
   run_simulation(g_state, g_state.controls.num_iters);
   generate_render_data(g_state);
-  log_gl_errors("finished generation\n");
+  log_gl_errors("ending sim pipeline\n");
 }
 
 void set_sample_render_data(RenderState& r_state) {

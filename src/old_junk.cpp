@@ -89,3 +89,33 @@ vector<MorphNode> gen_morph_data_old(ivec2 samples) {
   vertex_nodes.insert(vertex_nodes.end(), face_nodes.begin(), face_nodes.end());
   return vertex_nodes;
 }
+
+// a more compact node string
+/*
+string node_str(MorphNode const& node) {
+  array<char, 200> s;
+  if (node.node_type == TYPE_VERTEX) {
+    sprintf(s.data(), "VERT pos: %s, neighbors: %s, faces: %s",
+        vec3_str(node.pos).c_str(), ivec4_str(node.neighbors).c_str(),
+        ivec4_str(node.faces).c_str());
+  } else {
+    sprintf(s.data(), "FACE verts: %s", ivec4_str(node.neighbors).c_str());
+  }
+  return string(s.data());
+}
+*/
+
+// Helper for gen_morph_data
+// coord is the coord of the bot-left vertex of the face
+// returns -1 if no such face
+int face_index(ivec2 coord, ivec2 samples, int index_offset) {
+  if ((0 <= coord[0] && coord[0] < samples[0] - 1) &&
+      (0 <= coord[1] && coord[1] < samples[1] - 1)) {
+    int base_index = coord[0] % samples[0] + samples[0] * (coord[1] % samples[1]);
+    return base_index + index_offset;
+  } else {
+    return -1;
+  }
+}
+
+
