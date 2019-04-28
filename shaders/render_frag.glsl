@@ -1,27 +1,5 @@
-const char* RENDER_VERTEX_SRC = R"--(
-#version 410
+END_USER_UNIFS
 
-uniform mat4 mv_matrix;
-uniform mat4 proj_matrix;
-
-in vec3 vs_pos;
-in vec3 vs_nor;
-in vec4 vs_col;
-
-out vec3 fs_pos;
-out vec3 fs_nor;
-out vec4 fs_col;
-
-void main() {
-  fs_pos = vs_pos;
-  fs_nor = vs_nor;
-  fs_col = vs_col;
-  gl_Position = proj_matrix * mv_matrix * vec4(vs_pos, 1.0);
-}
-
-)--";
-
-const char* RENDER_FRAGMENT_SRC = R"--(
 #version 410
 
 uniform bool debug_render;
@@ -30,6 +8,7 @@ uniform vec3 debug_color;
 in vec3 fs_pos;
 in vec3 fs_nor;
 in vec4 fs_col;
+in vec4 fs_data;
 
 out vec4 color;
 
@@ -42,5 +21,3 @@ void main() {
   col = debug_render ? debug_color : col;
   color = vec4(col, 1.0);  
 }
-
-)--";

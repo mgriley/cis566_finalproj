@@ -1,7 +1,6 @@
 #include "app.h"
 #include "utils.h"
 #include "types.h"
-#include "render_shaders.h"
 #include "dummy_morph_shaders.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -19,12 +18,20 @@
 using namespace std;
 using namespace glm;
 
-// NOTE: change this for your own system
-// TODO - probs don't need this
-const string BASE_MORPH_SHADER_PATH =
-  "/Users/matthewriley/cis566/cis566_finalproj/morph_shaders/";
+// Size in bytes of the respective buffers
+// TODO - check these later
+const GLsizeiptr RENDER_VBO_SIZE = (GLsizeiptr) 1e8;
+const GLsizeiptr RENDER_INDEX_BUFFER_SIZE = (GLsizeiptr) 1e8;
+
+// The maximum # of morph nodes
+const int MAX_NUM_MORPH_NODES = (int) (1e8 / (float) sizeof(MorphNode));
+
+// NOTE: you must put the names of your morph and render shaders here
 const vector<string> morph_shader_files = {
   "growth.glsl",
+};
+const pair<string, string> render_shader_files = {
+  "render_vert.glsl", "render_frag.glsl"
 };
 
 void glfw_error_callback(int error_code, const char* error_msg) {
@@ -69,67 +76,16 @@ GLuint setup_program(string prog_name,
   return program;
 }
 
-// Size in bytes of the respective buffers
-// TODO - check these later
-const GLsizeiptr RENDER_VBO_SIZE = (GLsizeiptr) 1e8;
-const GLsizeiptr RENDER_INDEX_BUFFER_SIZE = (GLsizeiptr) 1e8;
-
-void init_render_state(GraphicsState& g_state) {
-  RenderState& r_state = g_state.render_state;
-
-  glEnable(GL_DEPTH_TEST);
-
-  glGenVertexArrays(1, &r_state.vao);
-  glBindVertexArray(r_state.vao);
-
-  glGenBuffers(1, &r_state.vbo);
-  glBindBuffer(GL_ARRAY_BUFFER, r_state.vbo);
-  // TODO - check this later (may not want static draw)
-  glBufferData(GL_ARRAY_BUFFER, RENDER_VBO_SIZE, nullptr, GL_STATIC_DRAW);
-  
-  glGenBuffers(1, &r_state.index_buffer);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
-  // TODO - check this later (may not want static draw)
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER, RENDER_INDEX_BUFFER_SIZE, nullptr, GL_STATIC_DRAW);
-
-  r_state.prog = setup_program(
-      "render program", RENDER_VERTEX_SRC, RENDER_FRAGMENT_SRC, false);
-  r_state.unif_mv_matrix = glGetUniformLocation(
-      r_state.prog, "mv_matrix");
-  r_state.unif_proj_matrix = glGetUniformLocation(
-      r_state.prog, "proj_matrix");
-  r_state.unif_debug_render = glGetUniformLocation(
-      r_state.prog, "debug_render");
-  r_state.unif_debug_color = glGetUniformLocation(
-      r_state.prog, "debug_color");
-  assert(r_state.unif_mv_matrix != -1);
-  assert(r_state.unif_proj_matrix != -1);
-  assert(r_state.unif_debug_render != -1);
-  assert(r_state.unif_debug_color != -1);
-
-  // interleave the attributes within the single VBO
-
-  r_state.pos_attrib = glGetAttribLocation(r_state.prog, "vs_pos");
-  r_state.nor_attrib = glGetAttribLocation(r_state.prog, "vs_nor");
-  r_state.col_attrib = glGetAttribLocation(r_state.prog, "vs_col");
-  assert(r_state.pos_attrib != -1);
-  assert(r_state.nor_attrib != -1);
-  assert(r_state.col_attrib != -1);
-
-  glVertexAttribPointer(r_state.pos_attrib, 3, GL_FLOAT, GL_FALSE,
-      sizeof(Vertex), (void*) offsetof(Vertex, pos));
-  glVertexAttribPointer(r_state.nor_attrib, 3, GL_FLOAT, GL_FALSE,
-      sizeof(Vertex), (void*) offsetof(Vertex, nor));
-  glVertexAttribPointer(r_state.col_attrib, 4, GL_FLOAT, GL_FALSE,
-      sizeof(Vertex), (void*) offsetof(Vertex, col));
-
-  glEnableVertexAttribArray(r_state.pos_attrib);
-  glEnableVertexAttribArray(r_state.nor_attrib);
-  glEnableVertexAttribArray(r_state.col_attrib);
+void setup_user_uniforms(const char* prog_name, GLuint prog, vector<UserUnif>& user_unifs) {
+  // setup user-defined unifs
+  for (UserUnif& user_unif : user_unifs) {
+    user_unif.gl_handle = glGetUniformLocation(
+        prog, user_unif.name.c_str());
+    if (user_unif.gl_handle == -1) {
+      printf("%s: WARNING user unif \"%s\" is -1\n", prog_name, user_unif.name.c_str());
+    }
+  }
 }
-
-// The maximum # of morph nodes
-const int MAX_NUM_MORPH_NODES = (int) (1e8 / (float) sizeof(MorphNode));
 
 void add_morph_program(MorphState& m_state, const char* prog_name,
     const char* vertex_src, vector<UserUnif>& user_unifs) {
@@ -142,18 +98,11 @@ void add_morph_program(MorphState& m_state, const char* prog_name,
 
   // setup uniforms
   glUseProgram(prog.gl_handle);
+  setup_user_uniforms(prog_name, prog.gl_handle, prog.user_unifs); 
   prog.unif_iter_num = glGetUniformLocation(
       prog.gl_handle, "iter_num");
   if (prog.unif_iter_num == -1) {
     printf("%s: WARNING iter_num is -1\n", prog_name);
-  }
-  // setup user-defined unifs
-  for (UserUnif& user_unif : prog.user_unifs) {
-    user_unif.gl_handle = glGetUniformLocation(
-        prog.gl_handle, user_unif.name.c_str());
-    if (user_unif.gl_handle == -1) {
-      printf("%s: WARNING user unif \"%s\" is -1\n", prog_name, user_unif.name.c_str());
-    }
   }
 
   // setup texture buffer samplers
@@ -189,12 +138,37 @@ void add_morph_program(MorphState& m_state, const char* prog_name,
   }
 }
 
-void load_morph_program(MorphState& m_state, string prog_name) {
+void set_render_program(RenderState& r_state, const char* prog_name,
+    const char* vertex_src, const char* frag_src, vector<UserUnif>& user_unifs) {
+  RenderProgram prog(prog_name, user_unifs);
+  prog.gl_handle = setup_program(
+      prog_name, vertex_src, frag_src, false);
 
-  string prog_filename = m_state.base_shader_path + "/morph_shaders/" + prog_name;
+  // setup uniforms
+  glUseProgram(prog.gl_handle);
+  setup_user_uniforms(prog_name, prog.gl_handle, prog.user_unifs);
+  prog.unif_mv_matrix = glGetUniformLocation(
+      prog.gl_handle, "mv_matrix");
+  prog.unif_proj_matrix = glGetUniformLocation(
+      prog.gl_handle, "proj_matrix");
+  prog.unif_debug_render = glGetUniformLocation(
+      prog.gl_handle, "debug_render");
+  prog.unif_debug_color = glGetUniformLocation(
+      prog.gl_handle, "debug_color");
+  assert(prog.unif_mv_matrix != -1);
+  assert(prog.unif_proj_matrix != -1);
+  assert(prog.unif_debug_render != -1);
+  assert(prog.unif_debug_color != -1);
+
+  // update the render program
+  r_state.prog = prog;
+}
+
+void read_prog_file(string prog_filename,
+    string& out_prog_text, vector<UserUnif>& out_user_unifs) {
   FILE* prog_file = fopen(prog_filename.c_str(), "r");
   if (!prog_file) {
-    printf("WARNING shader file not found at the path:\n%s\n", prog_name.c_str());
+    printf("WARNING shader file not found at the path:\n%s\n", prog_filename.c_str());
   }
   // read user defined uniforms from the file header
   vector<UserUnif> user_unifs;
@@ -235,26 +209,59 @@ void load_morph_program(MorphState& m_state, string prog_name) {
   assert(bytes_read == glsl_len);
   prog_buf[glsl_len] = '\0';
 
-  add_morph_program(m_state, prog_name.c_str(),
-      prog_buf.data(), user_unifs);
+  out_prog_text = string(prog_buf.data());
+  out_user_unifs = user_unifs;
 }
 
-void reload_current_program(MorphState& m_state) {
+void load_render_program(GraphicsState& g_state) {
+  // Note that the user must specify all tunable unifs in the vertex
+  // source file. The ones in the fragment file will be disregarded.
+
+  string vert_text;  
+  vector<UserUnif> vert_unifs;
+  string vert_filename = g_state.base_shader_path +
+    "/shaders/" + render_shader_files.first;
+  read_prog_file(vert_filename, vert_text, vert_unifs);
+  
+  string frag_text;
+  vector<UserUnif> frag_unifs;
+  string frag_filename = g_state.base_shader_path +
+    "/shaders/" + render_shader_files.second;
+  read_prog_file(frag_filename, frag_text, frag_unifs);
+
+  set_render_program(g_state.render_state, render_shader_files.first.c_str(),
+    vert_text.c_str(), frag_text.c_str(), vert_unifs);
+}
+
+void load_morph_program(GraphicsState& g_state, string prog_name) {
+  MorphState& m_state = g_state.morph_state;
+  string prog_text;
+  vector<UserUnif> user_unifs;
+  string prog_filename = g_state.base_shader_path + "/shaders/" + prog_name;
+  read_prog_file(prog_filename, prog_text, user_unifs);
+  add_morph_program(m_state, prog_name.c_str(), prog_text.c_str(), user_unifs);
+}
+
+void reload_current_programs(GraphicsState& g_state) {
+  // reload the current morph program and the render program
+  MorphState& m_state = g_state.morph_state;
   MorphProgram& cur_prog = m_state.programs[m_state.cur_prog_index];
-  load_morph_program(m_state, cur_prog.name);
+  load_morph_program(g_state, cur_prog.name);
+
+  load_render_program(g_state);
 }
 
-void load_all_morph_programs(MorphState& m_state) {
-  m_state.programs.clear();
+void load_all_morph_programs(GraphicsState& g_state) {
+  g_state.morph_state.programs.clear();
   for (string prog_name : morph_shader_files) {
-    load_morph_program(m_state, prog_name);    
+    load_morph_program(g_state, prog_name);    
   }
 }
 
 void init_morph_state(GraphicsState& g_state) {
   MorphState& m_state = g_state.morph_state;
 
-  load_all_morph_programs(m_state);
+  load_all_morph_programs(g_state);
 
   // Setup the VAO and other state for each of the two buffers
   // used for double-buffering
@@ -299,6 +306,45 @@ void init_morph_state(GraphicsState& g_state) {
       glBindTexture(GL_TEXTURE_BUFFER, m_buf.tex_bufs[i]);
       glTexBuffer(GL_TEXTURE_BUFFER, internal_formats[i], m_buf.vbos[i]);
     }
+  }
+}
+
+void init_render_state(GraphicsState& g_state) {
+  RenderState& r_state = g_state.render_state;
+
+  load_render_program(g_state);
+
+  glEnable(GL_DEPTH_TEST);
+
+  glGenVertexArrays(1, &r_state.vao);
+  glBindVertexArray(r_state.vao);
+
+  glGenBuffers(1, &r_state.vbo);
+  glBindBuffer(GL_ARRAY_BUFFER, r_state.vbo);
+  // TODO - check this later (may not want static draw)
+  glBufferData(GL_ARRAY_BUFFER, RENDER_VBO_SIZE, nullptr, GL_STATIC_DRAW);
+  
+  glGenBuffers(1, &r_state.index_buffer);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
+  // TODO - check this later (may not want static draw)
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, RENDER_INDEX_BUFFER_SIZE, nullptr, GL_STATIC_DRAW);
+
+  // interleave the attributes within the single VBO
+  // Note that this is independent of shader program since
+  // we the shader program must explicitly set the attribute locations
+
+  // each element is {num float components, offset}
+  vector<pair<int, void*>> attrib_params = {
+    {3, (void*) offsetof(Vertex, pos)},
+    {3, (void*) offsetof(Vertex, nor)},
+    {4, (void*) offsetof(Vertex, col)},
+    {4, (void*) offsetof(Vertex, data)}
+  };
+  assert(RENDER_ATTRIB_COUNT == attrib_params.size());
+  for (int i = 0; i < RENDER_ATTRIB_COUNT; ++i) {
+    glVertexAttribPointer(i, attrib_params[i].first, GL_FLOAT, GL_FALSE,
+        sizeof(Vertex), attrib_params[i].second);
+    glEnableVertexAttribArray(i);
   }
 }
 
@@ -366,9 +412,12 @@ void add_triangle_face(MorphNodes& node_vecs,
   }
   nor = normalize(nor);
   GLuint index_offset = vertices.size();
-  vector<vec3> positions = {p_a, p_b, p_c};
-  for (vec3 pos : positions) {
-    Vertex vertex(pos, nor, vec4(0.0,1.0,0.0,1.0));
+  vector<int> tri_indices = {i_a, i_b, i_c};
+  for (int vert_index : tri_indices) {
+    vec3 pos = vec3(node_vecs.pos_vec[vert_index]);
+    vec4 col = vec4(0.0,1.0,0.0,1.0);
+    vec4 data = node_vecs.data_vec[vert_index];
+    Vertex vertex(pos, nor, col, data);
     vertices.push_back(vertex);
   }
   // add the new indices
@@ -606,9 +655,9 @@ void run_simulation_pipeline(GraphicsState& g_state) {
 
 void set_sample_render_data(RenderState& r_state) {
   vector<Vertex> vertices = {
-    {vec3(0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)},
-    {vec3(1.0,0.0,0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)},
-    {vec3(1.0,1.0,0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0)}
+    {vec3(0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0), vec4(0.0)},
+    {vec3(1.0,0.0,0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0), vec4(0.0)},
+    {vec3(1.0,1.0,0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0), vec4(0.0)}
   };
   vector<GLuint> indices = {
     0, 1, 2
@@ -623,7 +672,7 @@ void set_sample_render_data(RenderState& r_state) {
 
 void render_frame(GraphicsState& g_state) {
   RenderState& r_state = g_state.render_state;
-  glUseProgram(r_state.prog);
+  glUseProgram(r_state.prog.gl_handle);
 
   // set uniforms
   float aspect_ratio = r_state.fb_width / (float) r_state.fb_height;
@@ -631,8 +680,8 @@ void render_frame(GraphicsState& g_state) {
   mat4 mv_matrix = glm::lookAt(cam.pos(), cam.pos() + cam.forward(), cam.up());
 
   mat4 proj_matrix = glm::perspective((float) M_PI / 4.0f, aspect_ratio, 1.0f, 10000.0f);
-  glUniformMatrix4fv(r_state.unif_mv_matrix, 1, 0, &mv_matrix[0][0]);
-  glUniformMatrix4fv(r_state.unif_proj_matrix, 1, 0, &proj_matrix[0][0]);
+  glUniformMatrix4fv(r_state.prog.unif_mv_matrix, 1, 0, &mv_matrix[0][0]);
+  glUniformMatrix4fv(r_state.prog.unif_proj_matrix, 1, 0, &proj_matrix[0][0]);
 
   //set_sample_render_data(r_state);
 
@@ -640,22 +689,22 @@ void render_frame(GraphicsState& g_state) {
   glPointSize(10.0f);
 
   if (g_state.controls.render_faces && r_state.elem_count > 0) {
-    glUniform1i(r_state.unif_debug_render, 0);
+    glUniform1i(r_state.prog.unif_debug_render, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
     glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
   }
   vec3 debug_col(1.0,0.0,0.0);
   if (g_state.controls.render_wireframe && r_state.elem_count > 0) {
-    glUniform1i(r_state.unif_debug_render, 1);
-    glUniform3fv(r_state.unif_debug_color, 1, &debug_col[0]);
+    glUniform1i(r_state.prog.unif_debug_render, 1);
+    glUniform3fv(r_state.prog.unif_debug_color, 1, &debug_col[0]);
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
     glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
   }
   if (g_state.controls.render_points && r_state.vertex_count > 0) {
-    glUniform1i(r_state.unif_debug_render, 1);
-    glUniform3fv(r_state.unif_debug_color, 1, &debug_col[0]);
+    glUniform1i(r_state.prog.unif_debug_render, 1);
+    glUniform3fv(r_state.prog.unif_debug_color, 1, &debug_col[0]);
     glDrawArrays(GL_POINTS, 0, r_state.vertex_count);
   }
 
@@ -679,7 +728,7 @@ void handle_key_event(GLFWwindow* win, int key, int scancode,
   }
   if (key == GLFW_KEY_P && action == GLFW_PRESS) {
     printf("reloading program\n");
-    reload_current_program(g_state->morph_state);
+    reload_current_programs(*g_state);
   }
 }
 
@@ -765,6 +814,18 @@ void update_camera(GLFWwindow* win, Controls& controls, Camera& cam) {
     update_camera_spherical(win, controls, cam);
   } else {
     update_camera_cartesian(win, controls, cam);
+  }
+}
+
+void gen_user_uniforms_ui(vector<UserUnif>& user_unifs) {
+  bool should_reset_unifs = ImGui::Button("restore defaults");
+  for (UserUnif& user_unif : user_unifs) {
+    if (should_reset_unifs) {
+      user_unif.cur_val = user_unif.def_val;
+    }
+    ImGui::DragScalarN(user_unif.name.c_str(), ImGuiDataType_Float,
+        &user_unif.cur_val[0], user_unif.num_comps, user_unif.drag_speed,
+        &user_unif.min, &user_unif.max, "%.3f");
   }
 }
 
@@ -874,7 +935,11 @@ void run_app(int argc, char** argv) {
     ImGui::Checkbox("render wireframe", &controls.render_wireframe);
 
     ImGui::Separator();
-    ImGui::Text("program controls:");
+    ImGui::Text("render program controls:");
+    gen_user_uniforms_ui(g_state.render_state.prog.user_unifs);
+
+    ImGui::Separator();
+    ImGui::Text("morph program controls:");
     MorphState& m_state = g_state.morph_state;
 
     vector<const char*> prog_names;
@@ -886,15 +951,7 @@ void run_app(int argc, char** argv) {
       //ImGui::DragFloat4(user_unif.name.c_str(), &user_unif.cur_val[0]);
 
     MorphProgram& cur_prog = m_state.programs[m_state.cur_prog_index];
-    bool should_reset_unifs = ImGui::Button("restore defaults");
-    for (UserUnif& user_unif : cur_prog.user_unifs) {
-      if (should_reset_unifs) {
-        user_unif.cur_val = user_unif.def_val;
-      }
-      ImGui::DragScalarN(user_unif.name.c_str(), ImGuiDataType_Float,
-          &user_unif.cur_val[0], user_unif.num_comps, user_unif.drag_speed,
-          &user_unif.min, &user_unif.max, "%.3f");
-    }
+    gen_user_uniforms_ui(cur_prog.user_unifs);
     
     ImGui::Separator();
     ImGui::Text("simulation controls:");

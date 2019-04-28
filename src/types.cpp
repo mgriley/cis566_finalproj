@@ -32,8 +32,17 @@ vec3 Camera::forward() const {
   return vec3(cam_to_world[2]);
 }
 
-Vertex::Vertex(vec3 pos, vec3 nor, vec4 col) :
-  pos(pos), nor(nor), col(col)
+Vertex::Vertex(vec3 pos, vec3 nor, vec4 col, vec4 data) :
+  pos(pos), nor(nor), col(col), data(data)
+{
+}
+
+RenderProgram::RenderProgram() {
+}
+
+RenderProgram::RenderProgram(string name,
+    vector<UserUnif>& user_unifs) :
+  name(name), user_unifs(user_unifs)
 {
 }
 
@@ -116,9 +125,8 @@ MorphProgram::MorphProgram(string name, vector<UserUnif>& user_unifs) :
 {
 }
 
-MorphState::MorphState(string base_shader_path) :
+MorphState::MorphState() :
   result_buffer_index(0),
-  base_shader_path(base_shader_path),
   cur_prog_index(0),
   num_nodes(0)
 {
@@ -140,7 +148,7 @@ Controls::Controls() :
 GraphicsState::GraphicsState(GLFWwindow* window,
     string base_shader_path) :
   window(window),
-  morph_state(base_shader_path)
+  base_shader_path(base_shader_path)
 {
 }
 

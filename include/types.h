@@ -18,13 +18,55 @@ struct Vertex {
   vec3 pos = vec3(0.0);
   vec3 nor = vec3(0.0);
   vec4 col = vec4(0.0);
+  vec4 data = vec4(0.0);
 
-  Vertex(vec3 pos, vec3 nor, vec4 col);
+  Vertex(vec3 pos, vec3 nor, vec4 col, vec4 data);
 };
 
+struct UserUnif {
+  string name;
+  GLuint gl_handle = 0;
+  int num_comps = 4;
+  float min = 0.0;
+  float max = 1.0;
+  float drag_speed = 5.0;
+  vec4 def_val = vec4(0.0);
+  vec4 cur_val = vec4(0.0);
+
+  UserUnif(string name, int num_comps, float min, float max,
+      float drag_speed, vec4 def_val, vec4 cur_val);
+};
+
+struct RenderProgram {
+  string name;
+  GLuint gl_handle = 0;
+
+  vector<UserUnif> user_unifs;
+  GLint unif_mv_matrix = -1;
+  GLint unif_proj_matrix = -1;
+  GLint unif_debug_render = -1;
+  GLint unif_debug_color = -1;
+
+  RenderProgram();
+  RenderProgram(string name, vector<UserUnif>& user_unifs);
+};
+
+// The GL locations of the render shader attributes
+enum RenderAttribs {
+  RENDER_POS_ATTRIB = 0,
+  RENDER_NOR_ATTRIB,
+  RENDER_COL_ATTRIB,
+  RENDER_DATA_ATTRIB,
+
+  RENDER_ATTRIB_COUNT
+};
+
+// Note: for now, we only allow one RenderProgram (though we have
+// multiple MorphProgram objects in MorphState). It would be easy
+// enough allow a list but it's not needed right now.
 struct RenderState {
   GLuint vao = 0;
-  GLuint prog = 0;
+  RenderProgram prog;
 
   int fb_width = 0;
   int fb_height = 0;
@@ -33,16 +75,7 @@ struct RenderState {
   GLuint index_buffer = 0;
   int elem_count = 0;
   int vertex_count = 0;
-
-  GLint unif_mv_matrix = -1;
-  GLint unif_proj_matrix = -1;
-  GLint unif_debug_render = -1;
-  GLint unif_debug_color = -1;
-
-  GLint pos_attrib = -1;
-  GLint nor_attrib = -1;
-  GLint col_attrib = -1;
-
+  
   RenderState();
 };
 
@@ -88,20 +121,6 @@ struct MorphBuffer {
   MorphBuffer();
 };
 
-struct UserUnif {
-  string name;
-  GLuint gl_handle = 0;
-  int num_comps = 4;
-  float min = 0.0;
-  float max = 1.0;
-  float drag_speed = 5.0;
-  vec4 def_val = vec4(0.0);
-  vec4 cur_val = vec4(0.0);
-
-  UserUnif(string name, int num_comps, float min, float max,
-      float drag_speed, vec4 def_val, vec4 cur_val);
-};
-
 struct MorphProgram {
   string name;
   GLuint gl_handle = 0;
@@ -119,14 +138,13 @@ struct MorphState {
   // the most recent simulation result
   int result_buffer_index = 0;
 
-  string base_shader_path;
   vector<MorphProgram> programs;
   int cur_prog_index = 0;
   
   // the number of nodes used in the most recent sim
   int num_nodes = 0;
 
-  MorphState(string base_shader_path);
+  MorphState();
 };
 
 // User controls 
@@ -153,6 +171,7 @@ struct GraphicsState {
   RenderState render_state;
   MorphState morph_state;
 
+  string base_shader_path;
   GLFWwindow* window;
   Camera camera;
   Controls controls;
