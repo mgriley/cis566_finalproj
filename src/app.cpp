@@ -191,10 +191,10 @@ void add_morph_program(MorphState& m_state, const char* prog_name,
 
 void load_morph_program(MorphState& m_state, string prog_name) {
 
-  string prog_filename = m_state.base_shader_path + prog_name;
+  string prog_filename = m_state.base_shader_path + "/morph_shaders/" + prog_name;
   FILE* prog_file = fopen(prog_filename.c_str(), "r");
   if (!prog_file) {
-    printf("WARNING shader file not found: %s\n", prog_name.c_str());
+    printf("WARNING shader file not found at the path:\n%s\n", prog_name.c_str());
   }
   // read user defined uniforms from the file header
   vector<UserUnif> user_unifs;
@@ -585,8 +585,13 @@ void update_ui_for_output(GraphicsState& g_state, MorphNodes& node_vecs) {
   }
   Camera far_cam;
   far_cam.set_view(
-      2.0f*length(furthest_pos)*normalize(vec3(0.0,1.0,-2.0)), vec3(0.0));
+      2.0f*length(furthest_pos)*normalize(vec3(0.0,2.0,-2.0)), vec3(0.0));
   g_state.controls.zoom_to_fit_cam = far_cam;
+
+  // if in sim-and-render mode, automatically adjust the camera as we go
+  if (glfwGetKey(g_state.window, GLFW_KEY_SPACE)) {
+    g_state.camera = far_cam;
+  }
 }
 
 void run_simulation_pipeline(GraphicsState& g_state) {
@@ -763,10 +768,18 @@ void update_camera(GLFWwindow* win, Controls& controls, Camera& cam) {
   }
 }
 
-void run_app() {
+void run_app(int argc, char** argv) {
   signal(SIGSEGV, handle_segfault);
-  glfwSetErrorCallback(glfw_error_callback);
 
+  // read cmd-line args
+  if (argc < 2) {
+    printf("Incorrect usage. Please use:\nexec path\n"
+        "where \"path\" is the path to the directory containing the"
+        " \"morph_shaders\" folder. Ex:\nexec ..");
+  }
+  string base_shader_path(argv[1]);
+
+  glfwSetErrorCallback(glfw_error_callback);
   if (!glfwInit()) {
     exit(EXIT_FAILURE);
   }
@@ -790,7 +803,7 @@ void run_app() {
 
   printf("OpenGL: %d.%d\n", GLVersion.major, GLVersion.minor);
 
-  GraphicsState g_state(BASE_MORPH_SHADER_PATH);
+  GraphicsState g_state(window, base_shader_path);
   setup_opengl(g_state);
 
   glfwSetWindowUserPointer(window, &g_state);
@@ -889,7 +902,7 @@ void run_app() {
     ImGui::Checkbox("log output nodes", &controls.log_output_nodes);
     ImGui::Checkbox("log render data", &controls.log_render_data);
     
-    if (ImGui::DragInt("num iters", &controls.num_iters, 10.0f, 0, (int) 1e12)) {
+    if (ImGui::DragInt("num iters", &controls.num_iters, 10.0f, 0, 1*1000*1000*1000)) {
       if (glfwGetKey(window, GLFW_KEY_SPACE)) {
         run_simulation_pipeline(g_state);
       }

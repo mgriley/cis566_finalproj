@@ -153,9 +153,10 @@ struct GraphicsState {
   RenderState render_state;
   MorphState morph_state;
 
+  GLFWwindow* window;
   Camera camera;
   Controls controls;
 
-  GraphicsState(string base_shader_path);
+  GraphicsState(GLFWwindow* window, string base_shader_path);
 };
 

@@ -137,7 +137,9 @@ Controls::Controls() :
 {
 }
 
-GraphicsState::GraphicsState(string base_shader_path) :
+GraphicsState::GraphicsState(GLFWwindow* window,
+    string base_shader_path) :
+  window(window),
   morph_state(base_shader_path)
 {
 }

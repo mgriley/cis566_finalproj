@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include "app.h"
 
-int main() {
-  run_app();
+int main(int argc, char** argv) {
+  run_app(argc, argv);
   return 0;
 }
