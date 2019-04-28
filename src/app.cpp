@@ -32,6 +32,16 @@
 using namespace std;
 using namespace glm;
 
+// NOTE: change this for your own system
+// TODO - probs don't need this
+const string BASE_MORPH_SHADER_PATH =
+  "/Users/matthewriley/cis566/cis566_finalproj/morph_shaders/";
+const vector<string> morph_shader_files = {
+  "growth.glsl",
+  //"basic",
+  //"dummy"
+};
+
 string vec3_str(vec3 v) {
   array<char, 100> s;
   sprintf(s.data(), "[%5.2f, %5.2f, %5.2f]", v[0], v[1], v[2]);
@@ -125,7 +135,15 @@ struct RenderState {
   GLint pos_attrib;
   GLint nor_attrib;
   GLint col_attrib;
+
+  RenderState();
 };
+
+RenderState::RenderState() :
+  elem_count(0),
+  vertex_count(0)
+{
+}
 
 struct MorphNode {
   vec4 pos;
@@ -218,21 +236,51 @@ struct MorphBuffer {
   GLuint vao;
   array<GLuint, MORPH_BUF_COUNT> vbos;
   array<GLuint, MORPH_BUF_COUNT> tex_bufs;
+
+  MorphBuffer();
 };
+
+MorphBuffer::MorphBuffer() :
+  vao(0)
+{
+}
+
+struct UserUnif {
+  string name;
+  GLuint gl_handle;
+  int num_comps;
+  float min;
+  float max;
+  float drag_speed;
+  vec4 def_val;
+  vec4 cur_val;
+
+  UserUnif(string name, int num_comps, float min, float max,
+      float drag_speed, vec4 def_val, vec4 cur_val);
+};
+
+UserUnif::UserUnif(string name, int num_comps, float min, float max,
+    float drag_speed, vec4 def_val, vec4 cur_val) :
+  name(name), gl_handle(-1), num_comps(num_comps), min(min), max(max),
+  drag_speed(drag_speed), def_val(def_val), cur_val(cur_val)
+{
+}
 
 struct MorphProgram {
   string name;
   GLuint gl_handle;
   array<GLint, MORPH_BUF_COUNT> unif_samplers;
   GLint unif_iter_num;
+  vector<UserUnif> user_unifs;
 
-  MorphProgram(string name);
+  MorphProgram(string name, vector<UserUnif>& user_unifs);
 };
 
-MorphProgram::MorphProgram(string name) :
+MorphProgram::MorphProgram(string name, vector<UserUnif>& user_unifs) :
   name(name),
   gl_handle(-1),
-  unif_iter_num(-1)
+  unif_iter_num(-1),
+  user_unifs(user_unifs)
 {
 }
 
@@ -243,6 +291,7 @@ struct MorphState {
   // the most recent simulation result
   int result_buffer_index;
 
+  string base_shader_path;
   vector<MorphProgram> programs;
   int cur_prog_index;
   
@@ -254,6 +303,7 @@ struct MorphState {
 
 MorphState::MorphState() :
   result_buffer_index(0),
+  base_shader_path(BASE_MORPH_SHADER_PATH),
   cur_prog_index(0),
   num_nodes(0)
 {
@@ -487,9 +537,9 @@ void init_render_state(GraphicsState& g_state) {
 // The maximum # of morph nodes
 const int MAX_NUM_MORPH_NODES = (int) (1e8 / (float) sizeof(MorphNode));
 
-MorphProgram init_morph_program(const char* prog_name,
-    const char* vertex_src) {
-  MorphProgram prog(prog_name);
+void add_morph_program(MorphState& m_state, const char* prog_name,
+    const char* vertex_src, vector<UserUnif>& user_unifs) {
+  MorphProgram prog(prog_name, user_unifs);
   prog.gl_handle = setup_program(
       prog_name, vertex_src, MORPH_DUMMY_FRAGMENT_SRC, true);
   
@@ -502,6 +552,14 @@ MorphProgram init_morph_program(const char* prog_name,
       prog.gl_handle, "iter_num");
   if (prog.unif_iter_num == -1) {
     printf("%s: WARNING iter_num is -1\n", prog_name);
+  }
+  // setup user-defined unifs
+  for (UserUnif& user_unif : prog.user_unifs) {
+    user_unif.gl_handle = glGetUniformLocation(
+        prog.gl_handle, user_unif.name.c_str());
+    if (user_unif.gl_handle == -1) {
+      printf("%s: WARNING user unif \"%s\" is -1\n", prog_name, user_unif.name.c_str());
+    }
   }
 
   // setup texture buffer samplers
@@ -522,7 +580,81 @@ MorphProgram init_morph_program(const char* prog_name,
           unif_sampler_names[i]);
     }
   }  
-  return prog;
+
+  // add the program or replace it if it already exists
+  bool existing_prog = false;
+  for (int i = 0; i < m_state.programs.size(); ++i) {
+    if (m_state.programs[i].name == prog.name) {
+      existing_prog = true;
+      m_state.programs[i] = prog;
+      break;
+    }
+  }
+  if (!existing_prog) {
+    m_state.programs.push_back(prog);
+  }
+}
+
+void load_morph_program(MorphState& m_state, string prog_name) {
+
+  string prog_filename = m_state.base_shader_path + prog_name;
+  FILE* prog_file = fopen(prog_filename.c_str(), "r");
+  if (!prog_file) {
+    printf("WARNING shader file not found: %s\n", prog_name.c_str());
+  }
+  // read user defined uniforms from the file header
+  vector<UserUnif> user_unifs;
+  while (true) {
+    array<char, 100> unif_name;
+    int num_comps = 0;
+    float min = 0.0;
+    float max = 1.0;
+    float drag_speed = 1.0;
+    vec4 def_val(0.0);
+
+    int num_read = fscanf(prog_file, "%s", unif_name.data());
+    assert(num_read == 1);
+    if (strcmp(unif_name.data(), "END_USER_UNIFS") == 0) {
+      break;    
+    }
+    num_read = fscanf(prog_file,
+        " comps %d min %f max %f speed %f default ",
+        &num_comps, &min, &max, &drag_speed);
+    assert(num_read == 4);
+    for (int i = 0; i < num_comps; ++i) {
+      num_read = fscanf(prog_file, "%f", &def_val[i]);
+      assert(num_read == 1);
+    }
+    UserUnif unif(unif_name.data(), num_comps,
+        min, max, drag_speed, def_val, def_val);
+    user_unifs.push_back(unif);
+  }
+  // read the GLSL text
+  long start_pos = ftell(prog_file);
+  fseek(prog_file, 0, SEEK_END);
+  long glsl_len = ftell(prog_file) - start_pos;
+  fseek(prog_file, start_pos, SEEK_SET);
+  array<char, 10000> prog_buf;
+  assert(glsl_len < prog_buf.size());
+  int bytes_read = fread(prog_buf.data(), 1, glsl_len, prog_file);
+  fclose(prog_file);
+  assert(bytes_read == glsl_len);
+  prog_buf[glsl_len] = '\0';
+
+  add_morph_program(m_state, prog_name.c_str(),
+      prog_buf.data(), user_unifs);
+}
+
+void reload_current_program(MorphState& m_state) {
+  MorphProgram& cur_prog = m_state.programs[m_state.cur_prog_index];
+  load_morph_program(m_state, cur_prog.name);
+}
+
+void load_all_morph_programs(MorphState& m_state) {
+  m_state.programs.clear();
+  for (string prog_name : morph_shader_files) {
+    load_morph_program(m_state, prog_name);    
+  }
 }
 
 void init_morph_state(GraphicsState& g_state) {
@@ -535,10 +667,7 @@ void init_morph_state(GraphicsState& g_state) {
     //{"basic", MORPH_BASIC_VERTEX_SRC},
     //{"dummy", MORPH_DUMMY_VERTEX_SRC}
   };
-  for (auto& elem : programs) {
-    MorphProgram prog = init_morph_program(elem.first, elem.second);
-    m_state.programs.push_back(prog);
-  }
+  load_all_morph_programs(m_state);
 
   // Setup the VAO and other state for each of the two buffers
   // used for double-buffering
@@ -823,6 +952,12 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
 
   glEnable(GL_RASTERIZER_DISCARD);
 
+  // Set user uniform values
+  for (UserUnif& user_unif : m_prog.user_unifs) {
+    printf("user unif: %s %s\n", user_unif.name.c_str(), vec4_str(user_unif.cur_val).c_str());
+    glUniform4fv(user_unif.gl_handle, 1, &user_unif.cur_val[0]);
+  }
+
   // perform double-buffered iterations
   // assume the initial data is in buffer 0
   printf("starting sim: %d iters, %d nodes\n", num_iters, m_state.num_nodes);
@@ -913,13 +1048,13 @@ void render_frame(GraphicsState& g_state) {
   glBindVertexArray(r_state.vao);
   glPointSize(10.0f);
 
-  if (g_state.controls.render_faces) {
+  if (g_state.controls.render_faces && r_state.elem_count > 0) {
     glUniform1i(r_state.unif_debug_render, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
     glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
   }
   vec3 debug_col(1.0,0.0,0.0);
-  if (g_state.controls.render_wireframe) {
+  if (g_state.controls.render_wireframe && r_state.elem_count > 0) {
     glUniform1i(r_state.unif_debug_render, 1);
     glUniform3fv(r_state.unif_debug_color, 1, &debug_col[0]);
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
@@ -927,7 +1062,7 @@ void render_frame(GraphicsState& g_state) {
     glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
   }
-  if (g_state.controls.render_points) {
+  if (g_state.controls.render_points && r_state.vertex_count > 0) {
     glUniform1i(r_state.unif_debug_render, 1);
     glUniform3fv(r_state.unif_debug_color, 1, &debug_col[0]);
     glDrawArrays(GL_POINTS, 0, r_state.vertex_count);
@@ -950,6 +1085,10 @@ void handle_key_event(GLFWwindow* win, int key, int scancode,
   }
   if (key == GLFW_KEY_T && action == GLFW_PRESS) {
     g_state->camera = controls.zoom_to_fit_cam;
+  }
+  if (key == GLFW_KEY_P && action == GLFW_PRESS) {
+    printf("reloading program\n");
+    reload_current_program(g_state->morph_state);
   }
 }
 
@@ -1134,20 +1273,41 @@ void run_app() {
     ImGui::Checkbox("render faces", &controls.render_faces);
     ImGui::Checkbox("render points", &controls.render_points);
     ImGui::Checkbox("render wireframe", &controls.render_wireframe);
+
+    ImGui::Separator();
+    ImGui::Text("program controls:");
+    MorphState& m_state = g_state.morph_state;
+
+    vector<const char*> prog_names;
+    for (auto& prog : g_state.morph_state.programs) {
+      prog_names.push_back(prog.name.c_str());
+    }
+    ImGui::Combo("program", &m_state.cur_prog_index,
+        prog_names.data(), prog_names.size());
+      //ImGui::DragFloat4(user_unif.name.c_str(), &user_unif.cur_val[0]);
+
+    MorphProgram& cur_prog = m_state.programs[m_state.cur_prog_index];
+    bool should_reset_unifs = ImGui::Button("restore defaults");
+    for (UserUnif& user_unif : cur_prog.user_unifs) {
+      if (should_reset_unifs) {
+        user_unif.cur_val = user_unif.def_val;
+      }
+      ImGui::DragScalarN(user_unif.name.c_str(), ImGuiDataType_Float,
+          &user_unif.cur_val[0], user_unif.num_comps, user_unif.drag_speed,
+          &user_unif.min, &user_unif.max, "%.3f");
+    }
     
     ImGui::Separator();
     ImGui::Text("simulation controls:");
     ImGui::Checkbox("log input nodes", &controls.log_input_nodes);
     ImGui::Checkbox("log output nodes", &controls.log_output_nodes);
     ImGui::Checkbox("log render data", &controls.log_render_data);
-    vector<const char*> prog_names;
-    for (auto& prog : g_state.morph_state.programs) {
-      prog_names.push_back(prog.name.c_str());
+    
+    if (ImGui::DragInt("num iters", &controls.num_iters, 10.0f, 0, (int) 1e12)) {
+      if (glfwGetKey(window, GLFW_KEY_SPACE)) {
+        run_simulation_pipeline(g_state);
+      }
     }
-    ImGui::Combo("program", &g_state.morph_state.cur_prog_index,
-        prog_names.data(), prog_names.size());
-    ImGui::InputInt("num iters", &controls.num_iters);
-    controls.num_iters = std::max(controls.num_iters, 0);
     ImGui::InputInt("AxA samples", &controls.num_zygote_samples);
     controls.num_zygote_samples = std::max(controls.num_zygote_samples, 0);
     if (ImGui::Button("run simulation")) {

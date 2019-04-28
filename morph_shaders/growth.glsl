@@ -1,12 +1,13 @@
-const char* MORPH_GROWTH_VERTEX_SRC = R"--(
+foo comps 1 min 0.0 max 1.0 speed 0.01 default 1.0
+bar comps 1 min 0.0 max 1.0 speed 0.01 default 1.0
+END_USER_UNIFS
+
 #version 410
 
 uniform int iter_num;
 
 // various user-tunable controls
-uniform vec4 controls_a;
-uniform vec4 controls_b;
-uniform vec4 controls_c;
+uniform vec4 foo;
 
 // use explicit locations so that these attributes in 
 // different programs explicitly use the same attribute indices
@@ -50,8 +51,9 @@ void main() {
     force = vec3(0.0);
   }
 
+  // TODO
+  float mass = foo.x;
   float delta_t = 0.017;
-  float mass = 1.0;
   vec3 accel = force / mass;
   vec3 v1 = v0 + accel*delta_t;
   vec3 p1 = p0 + v0 + accel*delta_t*delta_t/2.0;
@@ -61,5 +63,4 @@ void main() {
   out_neighbors = neighbors;
   out_data = data;
 }
-)--";
 
