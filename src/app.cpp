@@ -1,33 +1,20 @@
 #include "app.h"
-#include <glad/glad.h>
-#include <GLFW/glfw3.h>
-#include <stdlib.h>
-#include <execinfo.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <iostream>
+#include "utils.h"
+#include "types.h"
+#include "render_shaders.h"
+#include "dummy_morph_shaders.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+
 #include <chrono>
 #include <thread>
-#include <array>
-#include <vector>
 #include <utility>
 #include <tuple>
 #include <unordered_map>
+#include <iostream>
 #include <sstream>
 #include <fstream>
-#include <cstddef>
-#include "shaders/render_shaders.h"
-#include "shaders/dummy_morph_shaders.h"
-#include "shaders/basic_morph_shaders.h"
-#include "shaders/growth_morph_shaders.h"
-
-#define GLM_ENABLE_EXPERIMENTAL
-#include "glm/glm.hpp"
-#include "glm/gtc/matrix_transform.hpp"
-#include "glm/gtx/string_cast.hpp"
 
 using namespace std;
 using namespace glm;
@@ -38,403 +25,10 @@ const string BASE_MORPH_SHADER_PATH =
   "/Users/matthewriley/cis566/cis566_finalproj/morph_shaders/";
 const vector<string> morph_shader_files = {
   "growth.glsl",
-  //"basic",
-  //"dummy"
 };
-
-string vec3_str(vec3 v) {
-  array<char, 100> s;
-  sprintf(s.data(), "[%5.2f, %5.2f, %5.2f]", v[0], v[1], v[2]);
-  return string(s.data());
-}
-
-string vec4_str(vec4 v) {
-  array<char, 100> s;
-  sprintf(s.data(), "[%5.2f, %5.2f, %5.2f, %5.2f]", v[0], v[1], v[2], v[3]);
-  return string(s.data());
-}
-
-string ivec4_str(ivec4 v) {
-  array<char, 100> s;
-  sprintf(s.data(), "[%4d, %4d, %4d, %4d]", v[0], v[1], v[2], v[3]); 
-  return string(s.data());
-}
-
-struct Camera {
-  mat4 cam_to_world;
-
-  Camera();
-  void set_view(vec3 eye, vec3 target);
-  vec3 pos() const;
-  vec3 right() const;
-  vec3 up() const;
-  vec3 forward() const;
-};
-
-Camera::Camera() {
-  set_view(vec3(0.0,30.0,-30.0), vec3(0.0));
-}
-
-void Camera::set_view(vec3 eye, vec3 target) {
-  vec3 forward = normalize(target - eye);
-  vec3 right = normalize(cross(vec3(0.0,1.0,0.0), forward));
-  vec3 up = cross(forward, right);
-  
-  cam_to_world[0] = vec4(right, 0.0);
-  cam_to_world[1] = vec4(up, 0.0);
-  cam_to_world[2] = vec4(forward, 0.0);
-  cam_to_world[3] = vec4(eye, 1.0);
-}
-
-vec3 Camera::pos() const {
-  return vec3(cam_to_world[3]);
-}
-
-vec3 Camera::right() const {
-  return vec3(cam_to_world[0]);
-}
-
-vec3 Camera::up() const {
-  return vec3(cam_to_world[1]);
-}
-
-vec3 Camera::forward() const {
-  return vec3(cam_to_world[2]);
-}
-
-// For use in the interleaved render buffer
-struct Vertex {
-  vec3 pos;
-  vec3 nor;
-  vec4 col;
-
-  Vertex(vec3 pos, vec3 nor, vec4 col);
-};
-
-Vertex::Vertex(vec3 pos, vec3 nor, vec4 col) :
-  pos(pos), nor(nor), col(col)
-{
-}
-
-struct RenderState {
-  GLuint vao;
-  GLuint prog;
-
-  int fb_width, fb_height;
-
-  GLuint vbo;
-  GLuint index_buffer;
-  int elem_count;
-  int vertex_count;
-
-  GLint unif_mv_matrix;
-  GLint unif_proj_matrix;
-  GLint unif_debug_render;
-  GLint unif_debug_color;
-
-  GLint pos_attrib;
-  GLint nor_attrib;
-  GLint col_attrib;
-
-  RenderState();
-};
-
-RenderState::RenderState() :
-  elem_count(0),
-  vertex_count(0)
-{
-}
-
-struct MorphNode {
-  vec4 pos;
-  vec4 vel;
-  // in order of: {right, upper, left, lower} wrt surface normal
-  vec4 neighbors;
-  vec4 data;
-
-  MorphNode();
-  MorphNode(vec4 pos, vec4 vel, vec4 neighbors, vec4 data);
-};
-
-MorphNode::MorphNode():
-  pos(0.0),
-  vel(0.0),
-  neighbors(-1.0),
-  data(0.0)
-{
-}
-
-MorphNode::MorphNode(vec4 pos, vec4 vel,
-    vec4 neighbors, vec4 data) :
-  pos(pos),
-  vel(vel),
-  neighbors(neighbors),
-  data(data)
-{
-}
-
-struct MorphNodes {
-  vector<vec4> pos_vec;
-  vector<vec4> vel_vec;
-  vector<vec4> neighbors_vec;
-  vector<vec4> data_vec;
-
-  MorphNodes(size_t num_nodes);
-  MorphNodes(vector<MorphNode> const& nodes);
-  MorphNode node_at(size_t i) const;
-};
-
-MorphNodes::MorphNodes(size_t num_nodes) :
-  pos_vec(num_nodes),
-  vel_vec(num_nodes),
-  neighbors_vec(num_nodes),
-  data_vec(num_nodes)
-{
-}
-
-MorphNodes::MorphNodes(vector<MorphNode> const& nodes) :
-  pos_vec(nodes.size()),
-  vel_vec(nodes.size()),
-  neighbors_vec(nodes.size()),
-  data_vec(nodes.size())
-{
-  for (int i = 0; i < nodes.size(); ++i) {
-    MorphNode const& node = nodes[i];
-    pos_vec[i] = node.pos;
-    vel_vec[i] = node.vel;
-    neighbors_vec[i] = node.neighbors;
-    data_vec[i] = node.data;
-  }
-}
-
-MorphNode MorphNodes::node_at(size_t i) const {
-  return MorphNode(pos_vec[i], vel_vec[i], 
-      neighbors_vec[i], data_vec[i]);
-}
-
-string raw_node_str(MorphNode const& node) {
-  array<char, 200> s;
-  sprintf(s.data(), "pos: %s, vel: %s, neighbors: %s, data: %s",
-        vec4_str(node.pos).c_str(),
-        vec4_str(node.vel).c_str(),
-        vec4_str(node.neighbors).c_str(),
-        vec4_str(node.data).c_str());
-  return string(s.data());
-}
-
-// These serve as indices into the MorphBuffer vbos and tex_buf arrays
-enum MorphBuffers {
-  BUF_POS = 0,
-  BUF_VEL,
-  BUF_NEIGHBORS,
-  BUF_DATA,
-
-  MORPH_BUF_COUNT
-};
-
-struct MorphBuffer {
-  GLuint vao;
-  array<GLuint, MORPH_BUF_COUNT> vbos;
-  array<GLuint, MORPH_BUF_COUNT> tex_bufs;
-
-  MorphBuffer();
-};
-
-MorphBuffer::MorphBuffer() :
-  vao(0)
-{
-}
-
-struct UserUnif {
-  string name;
-  GLuint gl_handle;
-  int num_comps;
-  float min;
-  float max;
-  float drag_speed;
-  vec4 def_val;
-  vec4 cur_val;
-
-  UserUnif(string name, int num_comps, float min, float max,
-      float drag_speed, vec4 def_val, vec4 cur_val);
-};
-
-UserUnif::UserUnif(string name, int num_comps, float min, float max,
-    float drag_speed, vec4 def_val, vec4 cur_val) :
-  name(name), gl_handle(-1), num_comps(num_comps), min(min), max(max),
-  drag_speed(drag_speed), def_val(def_val), cur_val(cur_val)
-{
-}
-
-struct MorphProgram {
-  string name;
-  GLuint gl_handle;
-  array<GLint, MORPH_BUF_COUNT> unif_samplers;
-  GLint unif_iter_num;
-  vector<UserUnif> user_unifs;
-
-  MorphProgram(string name, vector<UserUnif>& user_unifs);
-};
-
-MorphProgram::MorphProgram(string name, vector<UserUnif>& user_unifs) :
-  name(name),
-  gl_handle(-1),
-  unif_iter_num(-1),
-  user_unifs(user_unifs)
-{
-}
-
-struct MorphState {
-  // for double-buffering
-  array<MorphBuffer, 2> buffers;
-  // set to the index of the buffer that holds
-  // the most recent simulation result
-  int result_buffer_index;
-
-  string base_shader_path;
-  vector<MorphProgram> programs;
-  int cur_prog_index;
-  
-  // the number of nodes used in the most recent sim
-  int num_nodes;
-
-  MorphState();
-};
-
-MorphState::MorphState() :
-  result_buffer_index(0),
-  base_shader_path(BASE_MORPH_SHADER_PATH),
-  cur_prog_index(0),
-  num_nodes(0)
-{
-}
-
-struct Controls {
-  // rendering
-  bool render_faces;
-  bool render_points;
-  bool render_wireframe;
-
-  // simulation
-  bool log_input_nodes;
-  bool log_output_nodes;
-  bool log_render_data;
-  int num_zygote_samples;
-  int num_iters;
-
-  bool cam_spherical_mode;
-  Camera zoom_to_fit_cam;
-
-  Controls();
-};
-
-Controls::Controls() :
-  render_faces(true),
-  render_points(true),
-  render_wireframe(true),
-  log_input_nodes(false),
-  log_output_nodes(false),
-  log_render_data(false),
-  num_zygote_samples(10),
-  num_iters(0),
-  cam_spherical_mode(true)
-{
-}
-
-struct GraphicsState {
-  Camera camera;
-  RenderState render_state;
-  MorphState morph_state;
-
-  // UI controls:
-  Controls controls;
-};
-
-void handle_segfault(int sig_num) {
-  array<void*, 15> frames{};
-  int num_frames = backtrace(frames.data(), frames.size());
-  fprintf(stdout, "SEGFAULT to stdout");
-  fprintf(stderr, "SEGFAULT signal: %d\n", sig_num);
-  backtrace_symbols_fd(frames.data(), num_frames, STDERR_FILENO);
-  exit(1);
-}
 
 void glfw_error_callback(int error_code, const char* error_msg) {
   printf("GLFW error: %d, %s", error_code, error_msg);
-}
-
-void log_opengl_info() {
-  // main info
-  const GLubyte* vendor = glGetString(GL_VENDOR);
-  const GLubyte* renderer = glGetString(GL_RENDERER);
-  const GLubyte* version = glGetString(GL_VERSION);
-  const GLubyte* glsl_version = glGetString(GL_SHADING_LANGUAGE_VERSION);
-  printf("vendor: %s\nrenderer: %s\nversion: %s\nglsl version: %s\n",
-      vendor, renderer, version, glsl_version);  
-
-  // secondary info
-  GLint value = 0;
-  glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &value);
-  printf("GL_MAX_TEXTURE_BUFFER_SIZE %d\n", value);
-  glGetIntegerv(GL_MAX_TEXTURE_SIZE, &value);
-  printf("GL_MAX_TEXTURE_SIZE %d\n", value);
-  glGetIntegerv(GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS, &value);
-  printf("GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS %d\n", value);
-  glGetIntegerv(GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS, &value);
-  printf("GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS %d\n", value);
-  glGetIntegerv(GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS, &value);
-  printf("GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS %d\n", value);
-}
-
-void log_gl_errors(string msg) {
-  GLenum error_code = glGetError();
-  if (error_code == GL_NO_ERROR) {
-    return;
-  }
-  string error_name;
-  switch (error_code) {
-  case GL_INVALID_ENUM:
-    error_name = "INVALID_ENUM";
-    break;
-  case GL_INVALID_VALUE:
-    error_name = "INVALID_VALUE";
-    break;
-  case GL_INVALID_OPERATION:
-    error_name = "INVALID_OPERATION";
-    break;
-  case GL_INVALID_FRAMEBUFFER_OPERATION:
-    error_name = "GL_INVALID_FRAMEBUFFER_OPERATION";
-    break;
-  case GL_OUT_OF_MEMORY:
-    error_name = "GL_OUT_OF_MEMORY";
-    break;
-  default:
-    error_name = "unknown error code";
-    break;
-  };
-  printf("%s: %s\n", msg.c_str(), error_name.c_str());
-}
-
-void log_program_info_logs(string msg, GLuint program) {
-  GLint log_len = 0;
-  glGetProgramiv(program, GL_INFO_LOG_LENGTH, &log_len);
-  if (log_len > 0) {
-    vector<GLchar> buffer(log_len);
-    GLsizei len_written = 0;
-    glGetProgramInfoLog(program, buffer.size(), &len_written, buffer.data());
-    printf("%s:\n%s\n", msg.data(), buffer.data());
-  }
-}
-
-void log_shader_info_logs(string msg, GLuint shader) {
-  GLint log_len = 0;
-  glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &log_len);
-  if (log_len > 0) {
-    vector<GLchar> buffer(log_len);
-    GLsizei len_written = 0;
-    glGetShaderInfoLog(shader, buffer.size(), &len_written, buffer.data());
-    printf("%s:\n%s\n", msg.data(), buffer.data());
-  }
 }
 
 GLuint setup_program(string prog_name,
@@ -660,13 +254,6 @@ void load_all_morph_programs(MorphState& m_state) {
 void init_morph_state(GraphicsState& g_state) {
   MorphState& m_state = g_state.morph_state;
 
-  // setup all of the morph programs
-  // each pair is {program name, program src}
-  vector<pair<const char*, const char*>> programs = {
-    {"growth", MORPH_GROWTH_VERTEX_SRC},
-    //{"basic", MORPH_BASIC_VERTEX_SRC},
-    //{"dummy", MORPH_DUMMY_VERTEX_SRC}
-  };
   load_all_morph_programs(m_state);
 
   // Setup the VAO and other state for each of the two buffers
@@ -1203,7 +790,7 @@ void run_app() {
 
   printf("OpenGL: %d.%d\n", GLVersion.major, GLVersion.minor);
 
-  GraphicsState g_state;
+  GraphicsState g_state(BASE_MORPH_SHADER_PATH);
   setup_opengl(g_state);
 
   glfwSetWindowUserPointer(window, &g_state);
