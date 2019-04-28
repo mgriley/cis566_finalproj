@@ -954,7 +954,6 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
 
   // Set user uniform values
   for (UserUnif& user_unif : m_prog.user_unifs) {
-    printf("user unif: %s %s\n", user_unif.name.c_str(), vec4_str(user_unif.cur_val).c_str());
     glUniform4fv(user_unif.gl_handle, 1, &user_unif.cur_val[0]);
   }
 
