@@ -18,9 +18,8 @@
 using namespace std;
 using namespace glm;
 
-// Size in bytes of the respective buffers
-// TODO - check these later
-const GLsizeiptr RENDER_VBO_SIZE = (GLsizeiptr) 1e8;
+// Size in bytes of the buffers
+// TODO - check later to make sure this is reasonable
 const GLsizeiptr RENDER_INDEX_BUFFER_SIZE = (GLsizeiptr) 1e8;
 
 // The maximum # of morph nodes
@@ -322,37 +321,11 @@ void init_render_state(GraphicsState& g_state) {
   load_render_program(g_state);
 
   glEnable(GL_DEPTH_TEST);
-
-  glGenVertexArrays(1, &r_state.vao);
-  glBindVertexArray(r_state.vao);
-
-  glGenBuffers(1, &r_state.vbo);
-  glBindBuffer(GL_ARRAY_BUFFER, r_state.vbo);
-  // TODO - check this later (may not want static draw)
-  glBufferData(GL_ARRAY_BUFFER, RENDER_VBO_SIZE, nullptr, GL_STATIC_DRAW);
   
   glGenBuffers(1, &r_state.index_buffer);
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
   // TODO - check this later (may not want static draw)
   glBufferData(GL_ELEMENT_ARRAY_BUFFER, RENDER_INDEX_BUFFER_SIZE, nullptr, GL_STATIC_DRAW);
-
-  // interleave the attributes within the single VBO
-  // Note that this is independent of shader program since
-  // we the shader program must explicitly set the attribute locations
-
-  // each element is {num float components, offset}
-  vector<pair<int, void*>> attrib_params = {
-    {4, (void*) offsetof(Vertex, pos)},
-    {4, (void*) offsetof(Vertex, vel)},
-    {4, (void*) offsetof(Vertex, data)},
-    {3, (void*) offsetof(Vertex, nor)}
-  };
-  assert(RENDER_ATTRIB_COUNT == attrib_params.size());
-  for (int i = 0; i < RENDER_ATTRIB_COUNT; ++i) {
-    glVertexAttribPointer(i, attrib_params[i].first, GL_FLOAT, GL_FALSE,
-        sizeof(Vertex), attrib_params[i].second);
-    glEnableVertexAttribArray(i);
-  }
 }
 
 void setup_opengl(GraphicsState& state) {
@@ -402,95 +375,22 @@ MorphNodes read_nodes_from_vbos(MorphState& m_state) {
   return node_vecs;
 }
 
-// Helper for gen_render_data
-// The node indices must be given in CCW winding order
-void add_triangle_face(MorphNodes& node_vecs,
-    vector<Vertex>& vertices, vector<GLuint>& indices,
-    int i_a, int i_b, int i_c) {
-  
-  // calc the normal from the face positions.
-  vec3 p_a = vec3(node_vecs.pos_vec[i_a]);
-  vec3 p_b = vec3(node_vecs.pos_vec[i_b]);
-  vec3 p_c = vec3(node_vecs.pos_vec[i_c]);
-  vec3 nor = cross(p_b - p_a, p_c - p_a);
-  if (dot(nor, nor) < 1e-12) {
-    // the face has no area, so skip it
-    return;
+void log_nodes(MorphNodes& node_vecs) {
+  printf("%lu nodes:\n", node_vecs.pos_vec.size()); 
+  for (int i = 0; i < node_vecs.pos_vec.size(); ++i) {
+    MorphNode node = node_vecs.node_at(i);
+    printf("%4d %s\n", i, raw_node_str(node).c_str());
   }
-  nor = normalize(nor);
-  GLuint index_offset = vertices.size();
-  vector<int> tri_indices = {i_a, i_b, i_c};
-  for (int vert_index : tri_indices) {
-    vec4 pos = node_vecs.pos_vec[vert_index];
-    vec4 vel = node_vecs.vel_vec[vert_index];
-    vec4 data = node_vecs.data_vec[vert_index];
-    Vertex vertex(pos, vel, data, nor);
-    vertices.push_back(vertex);
-  }
-  // add the new indices
-  vector<GLuint> new_indices = {
-    index_offset, index_offset + 1, index_offset + 2
-  };
-  indices.insert(indices.end(),
-      new_indices.begin(), new_indices.end());
+  printf("\n\n");
 }
 
-// Use the simulation data to generate render data
-void gen_render_data(GraphicsState& g_state, MorphNodes& node_vecs) {  
-  MorphState& m_state = g_state.morph_state;
-    
-  if (g_state.controls.log_output_nodes) {
-    // log nodes
-    printf("output nodes (%d):\n", m_state.num_nodes); 
-    for (int i = 0; i < node_vecs.pos_vec.size(); ++i) {
-      MorphNode node = node_vecs.node_at(i);
-      printf("%4d %s\n", i, raw_node_str(node).c_str());
-    }
-    printf("\n\n");
-  }
-
-  // convert the Node data to render data
-  
-  vector<Vertex> vertices;
-  vector<GLuint> indices;
-  for (int i = 0; i < node_vecs.pos_vec.size(); ++i) {
-    vec4 neighbors = node_vecs.neighbors_vec[i];
-    int i_a = i;
-    int i_b = (int) neighbors[0];
-    int i_c = (int) node_vecs.neighbors_vec[i_b][1];
-    int i_d = (int) neighbors[1];
-    if (i_b != -1 && i_d != -1) {
-      assert(i_c != -1);
-      add_triangle_face(node_vecs, vertices, indices, i_a, i_b, i_c);
-      add_triangle_face(node_vecs, vertices, indices, i_a, i_c, i_d);
-    }
-  }
-
-  if (g_state.controls.log_render_data) {
-    // log render data
-    printf("vertex data (%lu):\n", vertices.size());
-    for (int i = 0; i < vertices.size(); ++i) {
-      Vertex& v = vertices[i];
-      printf("%4d %s\n", i, vec3_str(v.pos).c_str());
-    }
-    printf("\n\nindex data (%lu):\n", indices.size());
-    for (int i = 0; i < indices.size(); i += 3) {
-      ivec3 face(indices[i], indices[i + 1], indices[i + 2]);
-      printf("%4d %s\n", i, to_string(face).c_str());
-    }
-  }
-
-  // write the render data to render buffers
+// write the index data to the GL element buffer
+void write_index_data(GraphicsState& g_state, vector<GLuint>& indices) {
   RenderState& r_state = g_state.render_state;
-  size_t vert_data_len = vertices.size() * sizeof(Vertex);
   size_t index_data_len = indices.size() * sizeof(GLuint);
-  assert(vert_data_len <= RENDER_VBO_SIZE);
   assert(index_data_len <= RENDER_INDEX_BUFFER_SIZE);
-  glBindBuffer(GL_ARRAY_BUFFER, r_state.vbo);
-  glBufferSubData(GL_ARRAY_BUFFER, 0, vert_data_len, vertices.data());
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
   glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, index_data_len, indices.data());
-  r_state.vertex_count = vertices.size();
   r_state.elem_count = indices.size();
 }
 
@@ -523,8 +423,10 @@ int coord_to_index(ivec2 coord, ivec2 samples) {
   }
 }
 
-vector<MorphNode> gen_morph_data(ivec2 samples) {
+// Outputs the nodes and the triangle indices, for rendering
+void gen_morph_data(ivec2 samples, vector<MorphNode>& out_nodes, vector<GLuint>& out_indices) {
   vector<MorphNode> vertex_nodes;
+  vector<GLuint> indices;
   vertex_nodes.reserve(samples[0] * samples[1]);
   for (int y = 0; y < samples[1]; ++y) {
     for (int x = 0; x < samples[0]; ++x) {
@@ -536,14 +438,29 @@ vector<MorphNode> gen_morph_data(ivec2 samples) {
       int right_neighbor = coord_to_index(coord + ivec2(1, 0), samples);
       int left_neighbor = coord_to_index(coord + ivec2(-1, 0), samples);
       vec4 neighbors((float) right_neighbor, (float) upper_neighbor, (float) left_neighbor, (float) lower_neighbor);
-      
+
       MorphNode vert_node(vec4(pos, 0.0), vec4(0.0), neighbors, vec4(0.0));
       vertex_nodes.push_back(vert_node);
+
+      // if this is the lower-left vert of a valid face, add the indices for
+      // the two triangles that make up the quad
+      if (right_neighbor != -1 && upper_neighbor != -1) {
+        int my_index = coord_to_index(coord, samples);
+        int opposite_neighbor = coord_to_index(coord + ivec2(1, 1), samples);
+        assert(opposite_neighbor != -1);
+        vector<GLuint> new_indices = {
+          (GLuint) my_index, (GLuint) right_neighbor, (GLuint) opposite_neighbor,
+          (GLuint) my_index, (GLuint) opposite_neighbor, (GLuint) upper_neighbor
+        };
+        indices.insert(indices.end(), new_indices.begin(), new_indices.end());
+      }
     }
   }
-  return vertex_nodes;
+  out_nodes = std::move(vertex_nodes);
+  out_indices = std::move(indices);
 }
 
+// TODO - no longer right sig
 vector<MorphNode> gen_sample_square() {
   vector<MorphNode> nodes = {
     MorphNode(vec4(-0.5,-0.5,0.0,0.0), vec4(0.0), vec4(ivec4(3,-1,1,-1)), vec4(0.0)),
@@ -561,18 +478,24 @@ void set_initial_sim_data(GraphicsState& g_state) {
   MorphBuffer& m_buf = g_state.morph_state.buffers[0];
 
   ivec2 zygote_samples(g_state.controls.num_zygote_samples);
-  vector<MorphNode> nodes = gen_morph_data(zygote_samples);
+  vector<MorphNode> nodes;
+  vector<GLuint> indices;
+  gen_morph_data(zygote_samples, nodes, indices);
   //vector<MorphNode> nodes = gen_sample_square();
   MorphNodes node_vecs(nodes);
+  write_index_data(g_state, indices);
 
-  // log nodes
+  // debug logging
+  if (g_state.controls.log_render_data) {
+    printf("\n\nindex data (%lu):\n", indices.size());
+    for (int i = 0; i < indices.size(); i += 3) {
+      ivec3 face(indices[i], indices[i + 1], indices[i + 2]);
+      printf("%4d %s\n", i, to_string(face).c_str());
+    }
+  }
   if (g_state.controls.log_input_nodes) {
     printf("input nodes:\n");
-    for (int i = 0; i < node_vecs.pos_vec.size(); ++i) {
-      MorphNode node = node_vecs.node_at(i);
-      printf("%4d %s\n", i, raw_node_str(node).c_str());
-    }
-    printf("\n\n");
+    log_nodes(node_vecs);
   }
 
   assert(nodes.size() < MAX_NUM_MORPH_NODES);
@@ -631,29 +554,21 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
   log_gl_errors("done simulation");
 }
 
-void update_ui_for_output(GraphicsState& g_state, MorphNodes& node_vecs) {
-  vec3 furthest_pos(0.0);
-  for (int i = 0; i < node_vecs.pos_vec.size(); ++i) {
-    if (length(node_vecs.pos_vec[i]) > length(furthest_pos)) {
-      furthest_pos = node_vecs.pos_vec[i];
-    }
-  }
-  Camera far_cam;
-  far_cam.set_view(
-      2.0f*length(furthest_pos)*normalize(vec3(0.0,2.0,-2.0)), vec3(0.0));
-  g_state.controls.zoom_to_fit_cam = far_cam;
-}
-
 void run_simulation_pipeline(GraphicsState& g_state) {
   log_gl_errors("starting sim pipeline\n");
   set_initial_sim_data(g_state);
   run_simulation(g_state, g_state.controls.num_iters);
-  MorphNodes node_vecs = read_nodes_from_vbos(g_state.morph_state);
-  update_ui_for_output(g_state, node_vecs);
-  gen_render_data(g_state, node_vecs);
+
+  if (g_state.controls.log_output_nodes) {
+    MorphNodes node_vecs = read_nodes_from_vbos(g_state.morph_state);
+    printf("output nodes:\n");
+    log_nodes(node_vecs);
+  }
+
   log_gl_errors("ending sim pipeline\n");
 }
 
+// TODO - remove
 /*
 void set_sample_render_data(RenderState& r_state) {
   vector<Vertex> vertices = {
@@ -673,8 +588,11 @@ void set_sample_render_data(RenderState& r_state) {
 }
 */
 
+// TODO - bind the texture buffers, too!
 void render_frame(GraphicsState& g_state) {
   RenderState& r_state = g_state.render_state;
+  MorphState& m_state = g_state.morph_state;
+
   glUseProgram(r_state.prog.gl_handle);
 
   // set uniforms
@@ -691,8 +609,8 @@ void render_frame(GraphicsState& g_state) {
   }
 
   //set_sample_render_data(r_state);
-
-  glBindVertexArray(r_state.vao);
+  MorphBuffer& target_buf = m_state.buffers[m_state.result_buffer_index];
+  glBindVertexArray(target_buf.vao);
   glPointSize(10.0f);
 
   if (g_state.controls.render_faces && r_state.elem_count > 0) {
@@ -709,10 +627,10 @@ void render_frame(GraphicsState& g_state) {
     glDrawElements(GL_TRIANGLES, r_state.elem_count, GL_UNSIGNED_INT, nullptr);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
   }
-  if (g_state.controls.render_points && r_state.vertex_count > 0) {
+  if (g_state.controls.render_points && m_state.num_nodes > 0) {
     glUniform1i(r_state.prog.unif_debug_render, 1);
     glUniform3fv(r_state.prog.unif_debug_color, 1, &debug_col[0]);
-    glDrawArrays(GL_POINTS, 0, r_state.vertex_count);
+    glDrawArrays(GL_POINTS, 0, m_state.num_nodes);
   }
 
   log_gl_errors("done render_frame");
@@ -729,9 +647,6 @@ void handle_key_event(GLFWwindow* win, int key, int scancode,
   }
   if (key == GLFW_KEY_F && action == GLFW_PRESS) {
     controls.cam_spherical_mode = !controls.cam_spherical_mode;
-  }
-  if (key == GLFW_KEY_T && action == GLFW_PRESS) {
-    g_state->camera = controls.zoom_to_fit_cam;
   }
   if (key == GLFW_KEY_P && action == GLFW_PRESS) {
     printf("reloading program\n");
@@ -824,10 +739,6 @@ void update_camera(GLFWwindow* win, Controls& controls, Camera& cam) {
     update_camera_spherical(win, controls, cam);
   } else {
     update_camera_cartesian(win, controls, cam);
-  }
-  // if holding space, auto-adjust camera as the simulation progresses
-  if (glfwGetKey(win, GLFW_KEY_SPACE)) {
-    cam = controls.zoom_to_fit_cam;
   }
 }
 

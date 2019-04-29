@@ -13,16 +13,6 @@ struct Camera {
   vec3 forward() const;
 };
 
-// For use in the interleaved render buffer
-struct Vertex {
-  vec4 pos = vec4(0.0);
-  vec4 vel = vec4(0.0);
-  vec4 data = vec4(0.0);
-  vec3 nor = vec3(0.0);
-
-  Vertex(vec4 pos, vec4 vel, vec4 data, vec3 nor);
-};
-
 struct UserUnif {
   string name;
   GLuint gl_handle = 0;
@@ -51,30 +41,17 @@ struct RenderProgram {
   RenderProgram(string name, vector<UserUnif>& user_unifs);
 };
 
-// The GL locations of the render shader attributes
-enum RenderAttribs {
-  RENDER_POS_ATTRIB = 0,
-  RENDER_VEL_ATTRIB,
-  RENDER_DATA_ATTRIB,
-  RENDER_NOR_ATTRIB,
-
-  RENDER_ATTRIB_COUNT
-};
-
 // Note: for now, we only allow one RenderProgram (though we have
 // multiple MorphProgram objects in MorphState). It would be easy
 // enough allow a list but it's not needed right now.
 struct RenderState {
-  GLuint vao = 0;
   RenderProgram prog;
 
   int fb_width = 0;
   int fb_height = 0;
 
-  GLuint vbo = 0;
   GLuint index_buffer = 0;
   int elem_count = 0;
-  int vertex_count = 0;
   
   RenderState();
 };
@@ -169,7 +146,6 @@ struct Controls {
   int delta_iters = 0;
 
   bool cam_spherical_mode = true;
-  Camera zoom_to_fit_cam;
 
   Controls();
 };

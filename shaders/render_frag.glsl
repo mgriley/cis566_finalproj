@@ -7,7 +7,9 @@ uniform vec3 debug_color;
 
 in vec4 fs_pos;
 in vec4 fs_vel;
+in vec4 fs_neighbors;
 in vec4 fs_data;
+
 in vec3 fs_nor;
 in vec3 fs_col;
 

@@ -32,11 +32,6 @@ vec3 Camera::forward() const {
   return vec3(cam_to_world[2]);
 }
 
-Vertex::Vertex(vec4 pos, vec4 vel, vec4 data, vec3 nor) :
-  pos(pos), vel(vel), data(data), nor(nor)
-{
-}
-
 RenderProgram::RenderProgram() {
 }
 

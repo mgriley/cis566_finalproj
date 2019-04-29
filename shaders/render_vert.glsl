@@ -12,12 +12,14 @@ uniform vec4 render_mode;
 
 layout (location = 0) in vec4 vs_pos;
 layout (location = 1) in vec4 vs_vel;
-layout (location = 2) in vec4 vs_data;
-layout (location = 3) in vec3 vs_nor;
+layout (location = 2) in vec4 vs_neighbors;
+layout (location = 3) in vec4 vs_data;
 
 out vec4 fs_pos;
 out vec4 fs_vel;
+out vec4 fs_neighbors;
 out vec4 fs_data;
+
 out vec3 fs_nor;
 out vec3 fs_col;
 
@@ -38,8 +40,10 @@ void main() {
 
   fs_pos = vs_pos;
   fs_vel = vs_vel;
+  fs_neighbors = vs_neighbors;
   fs_data = vs_data;
-  fs_nor = vs_nor;
+  // TODO - adjust this later (using the tex buffers)
+  fs_nor = vec3(0.0,1.0,0.0);
   fs_col = col;
   gl_Position = proj_matrix * mv_matrix * vec4(vs_pos.xyz, 1.0);
 }
