@@ -951,7 +951,9 @@ void run_app(int argc, char** argv) {
 
     ImGui::Separator();
     ImGui::Text("render program controls:");
+    ImGui::PushID("render");
     gen_user_uniforms_ui(g_state.render_state.prog.user_unifs);
+    ImGui::PopID();
 
     ImGui::Separator();
     ImGui::Text("morph program controls:");
@@ -966,7 +968,9 @@ void run_app(int argc, char** argv) {
       //ImGui::DragFloat4(user_unif.name.c_str(), &user_unif.cur_val[0]);
 
     MorphProgram& cur_prog = m_state.programs[m_state.cur_prog_index];
+    ImGui::PushID("morph");
     gen_user_uniforms_ui(cur_prog.user_unifs);
+    ImGui::PopID();
     
     ImGui::Separator();
     ImGui::Text("simulation controls:");

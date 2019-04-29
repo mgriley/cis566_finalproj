@@ -1,9 +1,9 @@
-foo comps 1 min 0.0 max 1.0 speed 0.01 default 1.0
-bar comps 1 min 0.0 max 1.0 speed 0.01 default 1.0
 norm_src_pos comps 1 min 0.0 max 1.0 speed 0.001 default 0.5
 fix_positions comps 1 min 0.0 max 1.0 speed 1.0 default 0.0
 src_heat_gen_rate comps 1 min 0.0 max 10.0 speed 0.01 default 4.0
 heat_transfer_coeff comps 1 min 0.0 max 1.0 speed 0.001 default 0.2
+target_spring_len comps 1 min 0.0 max 3.0 speed 0.01 default 0.5
+force_coeffs comps 3 min 0.0 max 3.0 speed 0.01 default 0.2 0.25 0.5
 END_USER_UNIFS
 
 #version 410
@@ -12,11 +12,12 @@ uniform int iter_num;
 uniform int num_nodes;
 
 // user-tunable uniforms
-uniform vec4 foo;
 uniform vec4 norm_src_pos;
 uniform vec4 fix_positions;
 uniform vec4 src_heat_gen_rate;
 uniform vec4 heat_transfer_coeff;
+uniform vec4 target_spring_len;
+uniform vec4 force_coeffs;
 
 // use explicit locations so that these attributes in 
 // different programs explicitly use the same attribute indices
@@ -124,45 +125,66 @@ float compute_next_heat() {
   return pos.w - total_heat_out + total_heat_in;
 }
 
-void run_reg_iter() {
-  vec3 p0 = pos.xyz;
-  vec3 v0 = vel.xyz;
-  
+// TODO - unused
+// Not actually the gradient, but same idea 
+vec3 heat_gradient() {
+  vec3 avg_delta_heat = vec3(0.0);
+  for (int i = 0; i < 4; ++i) {
+    int n_index = int(neighbors[i]);
+    if (n_index != -1) {
+      vec4 n_pos = texelFetch(pos_buf, n_index);
+      avg_delta_heat += normalize(n_pos.xyz - pos.xyz) * (n_pos.w - pos.w);
+    }
+  }
+  avg_delta_heat *= 0.25;
+  return avg_delta_heat;
+}
+
+vec3 compute_next_pos() {
+
   bool is_fixed = false;
   vec3 force = vec3(0.0);
+  vec3 avg_delta_heat = vec3(0.0);
   for (int i = 0; i < 4; ++i) {
     int n_i = int(neighbors[i]);
     if (n_i != -1) {
-      vec3 n_pos = texelFetch(pos_buf, n_i).xyz;
-      vec3 delta = n_pos - p0;
+      vec4 n_pos = texelFetch(pos_buf, n_i);
+      vec3 delta = n_pos.xyz - pos.xyz;
       float spring_len = length(delta);
-      force += normalize(delta) * (spring_len - 0.5);
+      force += force_coeffs.x * normalize(delta) *
+        (spring_len - target_spring_len.x);
+      avg_delta_heat += normalize(n_pos.xyz - pos.xyz) * (n_pos.w - pos.w);
     } else {
       is_fixed = true;
     }
   }
-  force += 1.0*vec3(0.0,-1.0,0.0);
-  force += -0.5 * v0;
+  avg_delta_heat *= 0.25;
+
+  if (vel.w != 0.0) {
+    force += force_coeffs.y * data.xyz;
+  } else {
+    force += force_coeffs.z * avg_delta_heat;
+  }
+
+  vec3 p_next = pos.xyz + force; 
 
   if (is_fixed) {
-    force = vec3(0.0);
+    p_next = pos.xyz;
   }
+  return p_next;
+}
 
-  // TODO
-  float mass = foo.x;
-  float delta_t = 0.017;
-  vec3 accel = force / mass;
-  vec3 v1 = v0 + accel*delta_t;
-  vec3 p1 = p0 + v0 + accel*delta_t*delta_t/2.0;
-
-  if (int(fix_positions.x) == 1.0) {
-    p1 = p0;
-  }
-
+void run_reg_iter() {
+  
+  vec3 next_pos = compute_next_pos();
   float next_heat = compute_next_heat();
 
-  out_pos = vec4(p1, next_heat);
-  out_vel = vec4(v1, vel.w);
+  if (int(fix_positions.x) == 1.0) {
+    next_pos = pos.xyz;
+  }
+
+  out_pos = vec4(next_pos, next_heat);
+  out_vel = vec4(vel.xyz, vel.w);
   out_neighbors = neighbors;
   out_data = data;
 }
@@ -174,4 +196,40 @@ void main() {
     run_reg_iter();
   }
 }
+
+// TODO - unused
+/*
+vec3 compute_next_pos_mass_spring() {
+  vec3 p0 = pos.xyz;
+  vec3 v0 = vel.xyz;
+  
+  bool is_fixed = false;
+  vec3 force = vec3(0.0);
+  for (int i = 0; i < 4; ++i) {
+    int n_i = int(neighbors[i]);
+    if (n_i != -1) {
+      vec3 n_pos = texelFetch(pos_buf, n_i).xyz;
+      vec3 delta = n_pos - p0;
+      float spring_len = length(delta);
+      force += normalize(delta) * (spring_len - target_spring_len.x);
+    } else {
+      is_fixed = true;
+    }
+  }
+  force += 1.0*vec3(0.0,-1.0,0.0);
+  force += -0.5 * v0;
+
+  // TODO
+  float mass = foo.x;
+  float delta_t = 0.017;
+  vec3 accel = force / mass;
+  vec3 v1 = v0 + accel*delta_t;
+  vec3 p1 = p0 + v0 + accel*delta_t*delta_t/2.0;
+
+  if (is_fixed) {
+    p1 = p0;
+  }
+  return p1;
+}
+*/
 
