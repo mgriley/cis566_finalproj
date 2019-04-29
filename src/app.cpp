@@ -208,7 +208,7 @@ void read_prog_file(string prog_filename,
   fseek(prog_file, 0, SEEK_END);
   long glsl_len = ftell(prog_file) - start_pos;
   fseek(prog_file, start_pos, SEEK_SET);
-  array<char, 10000> prog_buf;
+  array<char, 100000> prog_buf;
   assert(glsl_len < prog_buf.size());
   int bytes_read = fread(prog_buf.data(), 1, glsl_len, prog_file);
   fclose(prog_file);
@@ -820,22 +820,22 @@ void run_app(int argc, char** argv) {
   bool requires_mac_mojave_fix = true;
   bool show_dev_console = true;
   // for maintaining the fps
-  float fps = 60;
   auto start_of_frame = chrono::steady_clock::now();
-  chrono::milliseconds frame_duration{(int) (1000.0f / fps)};
   // for logging the fps
   int fps_stat = 0;
   int frame_counter = 0;
-  auto start_of_sec = chrono::steady_clock::now();
+  auto start_of_sec = start_of_frame;
 
   while (!glfwWindowShouldClose(window)) {
     std::this_thread::sleep_until(start_of_frame);
-    start_of_frame += frame_duration;
+    auto cur_time = chrono::steady_clock::now();
+    int frame_dur_millis = (int) (1000.0f / g_state.controls.target_fps);
+    start_of_frame = cur_time + chrono::milliseconds(frame_dur_millis);
 
     // for logging the fps
     frame_counter += 1;
-    if (start_of_sec < chrono::steady_clock::now()) {
-      start_of_sec += chrono::seconds(1);
+    if (start_of_sec < cur_time) {
+      start_of_sec = cur_time + chrono::seconds(1);
       fps_stat = frame_counter;
       frame_counter = 0;
     }
@@ -854,7 +854,8 @@ void run_app(int argc, char** argv) {
     ImGui::NewFrame();
 
     ImGui::Begin("dev console", &show_dev_console);
-    ImGui::Text("fps: %d", fps_stat);
+    ImGui::DragInt("target fps", &g_state.controls.target_fps, 1.0f, 0, 100);
+    ImGui::Text("current fps: %d", fps_stat);
 
     Controls& controls = g_state.controls;
 

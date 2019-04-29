@@ -1,12 +1,13 @@
-norm_src_pos comps 1 min 0.0 max 1.0 speed 0.001 default 0.5
 fix_positions comps 1 min 0.0 max 1.0 speed 1.0 default 0.0
+norm_src_pos comps 1 min 0.0 max 1.0 speed 0.001 default 0.5
+init_src_dir comps 3 min -1.0 max 1.0 speed 0.001 default 0.0 1.0 0.0
 src_heat_gen_rate comps 1 min 0.0 max 10.0 speed 0.01 default 4.0
 heat_transfer_coeff comps 1 min 0.0 max 1.0 speed 0.001 default 0.2
 target_spring_len comps 1 min 0.0 max 3.0 speed 0.01 default 0.5
 force_coeffs comps 3 min 0.0 max 3.0 speed 0.01 default 0.2 0.25 0.5
 src_creation_prob comps 1 min 0.0 max 1.0 speed 0.001 default 0.01
 src_trans_probs comps 2 min 0.0 max 1.0 speed 0.001 default 0.05 0.3
-cloning_coeffs comps 2 min 0.0 max 1.0 speed 0.005 default 0.5 0.5
+cloning_coeffs comps 2 min 0.0 max 1.0 speed 0.005 default 1.0 1.0
 END_USER_UNIFS
 
 #version 410
@@ -16,6 +17,7 @@ uniform int num_nodes;
 
 // user-tunable uniforms
 uniform vec4 norm_src_pos;
+uniform vec4 init_src_dir;
 uniform vec4 fix_positions;
 uniform vec4 src_heat_gen_rate;
 uniform vec4 heat_transfer_coeff;
@@ -79,9 +81,7 @@ void run_init_iter() {
   int side_len = int(sqrt(num_nodes));
   int target_src_id = int(num_nodes * norm_src_pos.x + 0.5 * side_len);
   if (gl_VertexID == target_src_id) {
-    float gen_rate = src_heat_gen_rate.x;
-    vec3 force_dir = vec3(0.0,1.0,0.0);
-    out_vel = vec4(force_dir, gen_rate);
+    out_vel = vec4(normalize(init_src_dir.xyz), src_heat_gen_rate.x);
   } else {
     out_vel = vec4(0.0);
   }
@@ -186,6 +186,25 @@ int rand_neighbor_index(vec3 node_pos, vec4 node_neighbors) {
   return n_index;
 }
 
+// Return the index of the neighbor that is furthest in the target direction
+// Note: target_dir must be normalized
+int directed_neighbor(vec3 node_pos, vec4 node_neighbors, vec3 target_dir) {
+  int out_index = -1;
+  float largest_dot = -2.0;
+  for (int i = 0; i < 4; ++i) {
+    int n_index = int(node_neighbors[i]);
+    if (n_index != -1) {
+      vec3 n_pos = texelFetch(pos_buf, n_index).xyz;
+      float d = dot(n_pos - node_pos, target_dir);
+      if (out_index == -1 || d > largest_dot) {
+        out_index = i;
+        largest_dot = d;
+      }
+    }
+  }
+  return out_index;
+}
+
 void compute_source_transition(out vec4 out_vel, out vec4 out_data) {
   vec4 next_vel = vel;
   vec4 next_data = vec4(-1.0);
@@ -203,22 +222,34 @@ void compute_source_transition(out vec4 out_vel, out vec4 out_data) {
         }
       }
     }
+
+    // TODO - perhaps promote to a src with some probabilty. curious if this gives decent results
+    
   } else {
     // this is a current src
 
     // clone if right conditions
     vec3 trans_noise = hash3(pos.xyz * iter_num);
     bool is_cloning = false;
-    if (trans_noise.x < src_trans_probs.x) {
+    // TODO
+    if (iter_num % 31 == 0) {
+    //if (trans_noise.x < src_trans_probs.x) {
       // turn on the request
       // Note that we encode the gen_amt as the vector len.
       // This only works b/c the gen_amt is strictly positive!
       // TODO - improve this later
-      vec3 clone_dir = normalize(vel.xyz + vec3(1.0,0.0,0.0));
+      
+      // create two new vecs mirrored across the current vec
+      // TODO - can make some variable angle apart
+      vec3 tangent_vec = normalize(cross(vel.xyz, trans_noise));
+      vec3 my_dir = normalize(vel.xyz - tangent_vec);
+      vec3 clone_dir = normalize(vel.xyz + tangent_vec);
+
       float clone_gen_amt = cloning_coeffs.y * vel.w;
-      int rand_n = rand_neighbor_index(pos.xyz, neighbors);
-      next_vel = vec4(vel.xyz, cloning_coeffs.x * vel.w);
-      next_data = vec4(clone_gen_amt * clone_dir, rand_n);
+      //int target_n = rand_neighbor_index(pos.xyz, neighbors);
+      int target_n = directed_neighbor(pos.xyz, neighbors, clone_dir);
+      next_vel = vec4(my_dir, cloning_coeffs.x * vel.w);
+      next_data = vec4(clone_gen_amt * clone_dir, target_n);
       is_cloning = true;
     }
 
@@ -227,9 +258,10 @@ void compute_source_transition(out vec4 out_vel, out vec4 out_data) {
     if (!is_cloning && trans_noise.y < src_trans_probs.y) {
       // Note that neighbor could be a src, in which case
       // we effectively eliminate a src.
-      int rand_n = rand_neighbor_index(pos.xyz, neighbors);
+      //int target_n = rand_neighbor_index(pos.xyz, neighbors);
+      int target_n = directed_neighbor(pos.xyz, neighbors, vel.xyz);
       next_vel = vec4(0.0);
-      next_data = vec4(vel.w * vel.xyz, rand_n);
+      next_data = vec4(vel.w * vel.xyz, target_n);
       is_walking = true;
     }
 
