@@ -1,6 +1,6 @@
 foo comps 1 min 0.0 max 1.0 speed 0.01 default 1.0
 baz comps 1 min 0.0 max 1.0 speed 0.01 default 3.0
-render_mode comps 1 min 0.0 max 2.0 speed 0.2 default 0.0
+render_mode comps 1 min 0.0 max 3.0 speed 0.1 default 0.0
 END_USER_UNIFS
 
 #version 410
@@ -30,6 +30,9 @@ void main() {
     col = mix(cold_col, hot_col, mix_amt);
   } else if (int(render_mode.x) == 2) {
     float heat_gen_amt = clamp(vs_vel.w, 0.0, 1.0);
+    col = vec3(heat_gen_amt, 0.0, 0.0);
+  } else if (int(render_mode.x) == 3) {
+    float heat_gen_amt = vs_vel.w > 0.0 ? 1.0 : 0.0;
     col = vec3(heat_gen_amt, 0.0, 0.0);
   }
 
