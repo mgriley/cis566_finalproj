@@ -428,6 +428,7 @@ void gen_morph_data(ivec2 samples, vector<MorphNode>& out_nodes, vector<GLuint>&
   vector<MorphNode> vertex_nodes;
   vector<GLuint> indices;
   vertex_nodes.reserve(samples[0] * samples[1]);
+  indices.reserve(6 * (samples[0] - 1) * (samples[1] - 1));
   for (int y = 0; y < samples[1]; ++y) {
     for (int x = 0; x < samples[0]; ++x) {
       ivec2 coord(x, y);
@@ -437,7 +438,9 @@ void gen_morph_data(ivec2 samples, vector<MorphNode>& out_nodes, vector<GLuint>&
       int lower_neighbor = coord_to_index(coord + ivec2(0, -1), samples);
       int right_neighbor = coord_to_index(coord + ivec2(1, 0), samples);
       int left_neighbor = coord_to_index(coord + ivec2(-1, 0), samples);
-      vec4 neighbors((float) right_neighbor, (float) upper_neighbor, (float) left_neighbor, (float) lower_neighbor);
+      vec4 neighbors(
+          (float) right_neighbor, (float) upper_neighbor,
+          (float) left_neighbor, (float) lower_neighbor);
 
       MorphNode vert_node(vec4(pos, 0.0), vec4(0.0), neighbors, vec4(0.0));
       vertex_nodes.push_back(vert_node);
@@ -534,6 +537,7 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
     glUniform1i(m_prog.unif_iter_num, i);
 
     // setup texture buffers and transform feedback buffers
+    // TODO - is this necessary every iteration, or just once?
     glBindVertexArray(cur_buf.vao);
     for (int i = 0; i < MORPH_BUF_COUNT; ++i) {
       glActiveTexture(GL_TEXTURE0 + i);
@@ -556,6 +560,7 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
 
 void run_simulation_pipeline(GraphicsState& g_state) {
   log_gl_errors("starting sim pipeline\n");
+
   set_initial_sim_data(g_state);
   run_simulation(g_state, g_state.controls.num_iters);
 
