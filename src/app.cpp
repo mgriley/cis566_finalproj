@@ -588,7 +588,6 @@ void set_sample_render_data(RenderState& r_state) {
 }
 */
 
-// TODO - bind the texture buffers, too!
 void render_frame(GraphicsState& g_state) {
   RenderState& r_state = g_state.render_state;
   MorphState& m_state = g_state.morph_state;
@@ -612,6 +611,12 @@ void render_frame(GraphicsState& g_state) {
   MorphBuffer& target_buf = m_state.buffers[m_state.result_buffer_index];
   glBindVertexArray(target_buf.vao);
   glPointSize(10.0f);
+
+  // bind texture buffers
+  for (int i = 0; i < MORPH_BUF_COUNT; ++i) {
+    glActiveTexture(GL_TEXTURE0 + i);
+    glBindTexture(GL_TEXTURE_BUFFER, target_buf.tex_bufs[i]);
+  }
 
   if (g_state.controls.render_faces && r_state.elem_count > 0) {
     glUniform1i(r_state.prog.unif_debug_render, 0);
