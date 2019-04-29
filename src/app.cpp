@@ -104,6 +104,11 @@ void add_morph_program(MorphState& m_state, const char* prog_name,
   if (prog.unif_iter_num == -1) {
     printf("%s: WARNING iter_num is -1\n", prog_name);
   }
+  prog.unif_num_nodes = glGetUniformLocation(
+      prog.gl_handle, "num_nodes");
+  if (prog.unif_num_nodes == -1) {
+    printf("%s: WARNING num_nodes is -1\n", prog_name);
+  }
 
   // setup texture buffer samplers
   vector<const char*> unif_sampler_names = {
@@ -155,10 +160,12 @@ void set_render_program(RenderState& r_state, const char* prog_name,
       prog.gl_handle, "debug_render");
   prog.unif_debug_color = glGetUniformLocation(
       prog.gl_handle, "debug_color");
+  /*
   assert(prog.unif_mv_matrix != -1);
   assert(prog.unif_proj_matrix != -1);
   assert(prog.unif_debug_render != -1);
   assert(prog.unif_debug_color != -1);
+  */
 
   // update the render program
   r_state.prog = prog;
@@ -335,10 +342,10 @@ void init_render_state(GraphicsState& g_state) {
 
   // each element is {num float components, offset}
   vector<pair<int, void*>> attrib_params = {
-    {3, (void*) offsetof(Vertex, pos)},
-    {3, (void*) offsetof(Vertex, nor)},
-    {4, (void*) offsetof(Vertex, col)},
-    {4, (void*) offsetof(Vertex, data)}
+    {4, (void*) offsetof(Vertex, pos)},
+    {4, (void*) offsetof(Vertex, vel)},
+    {4, (void*) offsetof(Vertex, data)},
+    {3, (void*) offsetof(Vertex, nor)}
   };
   assert(RENDER_ATTRIB_COUNT == attrib_params.size());
   for (int i = 0; i < RENDER_ATTRIB_COUNT; ++i) {
@@ -414,10 +421,10 @@ void add_triangle_face(MorphNodes& node_vecs,
   GLuint index_offset = vertices.size();
   vector<int> tri_indices = {i_a, i_b, i_c};
   for (int vert_index : tri_indices) {
-    vec3 pos = vec3(node_vecs.pos_vec[vert_index]);
-    vec4 col = vec4(0.0,1.0,0.0,1.0);
+    vec4 pos = node_vecs.pos_vec[vert_index];
+    vec4 vel = node_vecs.vel_vec[vert_index];
     vec4 data = node_vecs.data_vec[vert_index];
-    Vertex vertex(pos, nor, col, data);
+    Vertex vertex(pos, vel, data, nor);
     vertices.push_back(vertex);
   }
   // add the new indices
@@ -588,14 +595,14 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
 
   glEnable(GL_RASTERIZER_DISCARD);
 
-  // Set user uniform values
+  // Set uniforms
   for (UserUnif& user_unif : m_prog.user_unifs) {
     glUniform4fv(user_unif.gl_handle, 1, &user_unif.cur_val[0]);
   }
+  glUniform1i(m_prog.unif_num_nodes, m_state.num_nodes);
 
   // perform double-buffered iterations
   // assume the initial data is in buffer 0
-  printf("starting sim: %d iters, %d nodes\n", num_iters, m_state.num_nodes);
   for (int i = 0; i < num_iters; ++i) {
     MorphBuffer& cur_buf = m_state.buffers[i & 1];
     MorphBuffer& next_buf = m_state.buffers[(i + 1) & 1];
@@ -616,7 +623,6 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
     glDrawArrays(GL_POINTS, 0, m_state.num_nodes);
     glEndTransformFeedback();
   }
-  printf("done sim\n");
   // store the index of the most recently written buffer
   m_state.result_buffer_index = num_iters % 2;
 
@@ -636,11 +642,6 @@ void update_ui_for_output(GraphicsState& g_state, MorphNodes& node_vecs) {
   far_cam.set_view(
       2.0f*length(furthest_pos)*normalize(vec3(0.0,2.0,-2.0)), vec3(0.0));
   g_state.controls.zoom_to_fit_cam = far_cam;
-
-  // if in sim-and-render mode, automatically adjust the camera as we go
-  if (glfwGetKey(g_state.window, GLFW_KEY_SPACE)) {
-    g_state.camera = far_cam;
-  }
 }
 
 void run_simulation_pipeline(GraphicsState& g_state) {
@@ -653,6 +654,7 @@ void run_simulation_pipeline(GraphicsState& g_state) {
   log_gl_errors("ending sim pipeline\n");
 }
 
+/*
 void set_sample_render_data(RenderState& r_state) {
   vector<Vertex> vertices = {
     {vec3(0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0), vec4(0.0)},
@@ -669,6 +671,7 @@ void set_sample_render_data(RenderState& r_state) {
   r_state.vertex_count = vertices.size();
   r_state.elem_count = indices.size();
 }
+*/
 
 void render_frame(GraphicsState& g_state) {
   RenderState& r_state = g_state.render_state;
@@ -678,10 +681,14 @@ void render_frame(GraphicsState& g_state) {
   float aspect_ratio = r_state.fb_width / (float) r_state.fb_height;
   Camera& cam = g_state.camera;
   mat4 mv_matrix = glm::lookAt(cam.pos(), cam.pos() + cam.forward(), cam.up());
-
   mat4 proj_matrix = glm::perspective((float) M_PI / 4.0f, aspect_ratio, 1.0f, 10000.0f);
   glUniformMatrix4fv(r_state.prog.unif_mv_matrix, 1, 0, &mv_matrix[0][0]);
   glUniformMatrix4fv(r_state.prog.unif_proj_matrix, 1, 0, &proj_matrix[0][0]);
+
+  // Set user uniform values
+  for (UserUnif& user_unif : r_state.prog.user_unifs) {
+    glUniform4fv(user_unif.gl_handle, 1, &user_unif.cur_val[0]);
+  }
 
   //set_sample_render_data(r_state);
 
@@ -729,6 +736,9 @@ void handle_key_event(GLFWwindow* win, int key, int scancode,
   if (key == GLFW_KEY_P && action == GLFW_PRESS) {
     printf("reloading program\n");
     reload_current_programs(*g_state);
+  }
+  if (key == GLFW_KEY_C && action == GLFW_PRESS) {
+    run_simulation_pipeline(*g_state);  
   }
 }
 
@@ -815,6 +825,10 @@ void update_camera(GLFWwindow* win, Controls& controls, Camera& cam) {
   } else {
     update_camera_cartesian(win, controls, cam);
   }
+  // if holding space, auto-adjust camera as the simulation progresses
+  if (glfwGetKey(win, GLFW_KEY_SPACE)) {
+    cam = controls.zoom_to_fit_cam;
+  }
 }
 
 void gen_user_uniforms_ui(vector<UserUnif>& user_unifs) {
@@ -834,9 +848,10 @@ void run_app(int argc, char** argv) {
 
   // read cmd-line args
   if (argc < 2) {
-    printf("Incorrect usage. Please use:\nexec path\n"
+    printf("Incorrect usage. Please use:\n\nexec path\n\n"
         "where \"path\" is the path to the directory containing the"
-        " \"morph_shaders\" folder. Ex:\nexec ..");
+        " \"shaders\" folder. Ex: \"exec ..\"\n");
+    return;
   }
   string base_shader_path(argv[1]);
 
@@ -955,19 +970,48 @@ void run_app(int argc, char** argv) {
     
     ImGui::Separator();
     ImGui::Text("simulation controls:");
+    ImGui::Text("seed:");
+    ImGui::InputInt("AxA samples", &controls.num_zygote_samples);
+    controls.num_zygote_samples = std::max(controls.num_zygote_samples, 0);
+    
+    ImGui::Text("simulation:"); 
+    int max_iter_num = 1*1000*1000*1000;
+    ImGui::DragInt("iter num", &controls.num_iters, 0.2f, 0, max_iter_num);
+    if (ImGui::Button("run once")) {
+      run_simulation_pipeline(g_state);  
+    }
+    ImGui::Text("animation:");
+    string anim_btn_text(controls.animating_sim ? "PAUSE" : "PLAY");
+    if (ImGui::Button(anim_btn_text.c_str())) {
+      controls.animating_sim = !controls.animating_sim;
+    }
+    ImGui::DragInt("start iter", &controls.start_iter_num, 10.0f, 0, max_iter_num);
+    ImGui::DragInt("end iter", &controls.end_iter_num, 10.0f, controls.start_iter_num, max_iter_num);
+    ImGui::DragInt("delta iters per frame", &controls.delta_iters, 0.2f, -10, 10);
+    ImGui::Checkbox("loop at end", &controls.loop_at_end);
+    
+    // run the animation
+    if (controls.animating_sim) {
+      controls.num_iters += controls.delta_iters;
+      controls.num_iters = clamp(controls.num_iters,
+          controls.start_iter_num, controls.end_iter_num);
+      if (controls.loop_at_end && controls.num_iters == controls.end_iter_num) {
+        controls.num_iters = controls.start_iter_num;
+      }
+      run_simulation_pipeline(g_state);
+    }
+
+    ImGui::Separator();
+    ImGui::Text("debug");
+    ImGui::Text("Note that logging will not occur while animating");
     ImGui::Checkbox("log input nodes", &controls.log_input_nodes);
     ImGui::Checkbox("log output nodes", &controls.log_output_nodes);
     ImGui::Checkbox("log render data", &controls.log_render_data);
-    
-    if (ImGui::DragInt("num iters", &controls.num_iters, 10.0f, 0, 1*1000*1000*1000)) {
-      if (glfwGetKey(window, GLFW_KEY_SPACE)) {
-        run_simulation_pipeline(g_state);
-      }
-    }
-    ImGui::InputInt("AxA samples", &controls.num_zygote_samples);
-    controls.num_zygote_samples = std::max(controls.num_zygote_samples, 0);
-    if (ImGui::Button("run simulation")) {
-      run_simulation_pipeline(g_state);  
+    // do not log while animating, the IO becomes a bottleneck
+    if (controls.animating_sim) {
+      controls.log_input_nodes = false;
+      controls.log_output_nodes = false;
+      controls.log_render_data = false;
     }
 
     ImGui::End();

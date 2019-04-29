@@ -32,8 +32,8 @@ vec3 Camera::forward() const {
   return vec3(cam_to_world[2]);
 }
 
-Vertex::Vertex(vec3 pos, vec3 nor, vec4 col, vec4 data) :
-  pos(pos), nor(nor), col(col), data(data)
+Vertex::Vertex(vec4 pos, vec4 vel, vec4 data, vec3 nor) :
+  pos(pos), vel(vel), data(data), nor(nor)
 {
 }
 
@@ -132,16 +132,7 @@ MorphState::MorphState() :
 {
 }
 
-Controls::Controls() :
-  render_faces(true),
-  render_points(true),
-  render_wireframe(true),
-  log_input_nodes(false),
-  log_output_nodes(false),
-  log_render_data(false),
-  num_zygote_samples(10),
-  num_iters(0),
-  cam_spherical_mode(true)
+Controls::Controls()
 {
 }
 

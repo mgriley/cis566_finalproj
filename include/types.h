@@ -15,12 +15,12 @@ struct Camera {
 
 // For use in the interleaved render buffer
 struct Vertex {
-  vec3 pos = vec3(0.0);
-  vec3 nor = vec3(0.0);
-  vec4 col = vec4(0.0);
+  vec4 pos = vec4(0.0);
+  vec4 vel = vec4(0.0);
   vec4 data = vec4(0.0);
+  vec3 nor = vec3(0.0);
 
-  Vertex(vec3 pos, vec3 nor, vec4 col, vec4 data);
+  Vertex(vec4 pos, vec4 vel, vec4 data, vec3 nor);
 };
 
 struct UserUnif {
@@ -54,9 +54,9 @@ struct RenderProgram {
 // The GL locations of the render shader attributes
 enum RenderAttribs {
   RENDER_POS_ATTRIB = 0,
-  RENDER_NOR_ATTRIB,
-  RENDER_COL_ATTRIB,
+  RENDER_VEL_ATTRIB,
   RENDER_DATA_ATTRIB,
+  RENDER_NOR_ATTRIB,
 
   RENDER_ATTRIB_COUNT
 };
@@ -126,6 +126,7 @@ struct MorphProgram {
   GLuint gl_handle = 0;
   array<GLint, MORPH_BUF_COUNT> unif_samplers = {0};
   GLint unif_iter_num = -1;
+  GLint unif_num_nodes = -1;
   vector<UserUnif> user_unifs;
 
   MorphProgram(string name, vector<UserUnif>& user_unifs);
@@ -150,18 +151,24 @@ struct MorphState {
 // User controls 
 struct Controls {
   // rendering
-  bool render_faces;
-  bool render_points;
-  bool render_wireframe;
+  bool render_faces = true;
+  bool render_points = true;
+  bool render_wireframe = true;
 
   // simulation
-  bool log_input_nodes;
-  bool log_output_nodes;
-  bool log_render_data;
-  int num_zygote_samples;
-  int num_iters;
+  bool log_input_nodes = false;
+  bool log_output_nodes = false;
+  bool log_render_data = false;
+  int num_zygote_samples = 10;
+  // for the simulation/animation pane
+  int num_iters = 0;
+  bool animating_sim = false;
+  bool loop_at_end = false;
+  int start_iter_num = 0;
+  int end_iter_num = 10*1000*1000;
+  int delta_iters = 0;
 
-  bool cam_spherical_mode;
+  bool cam_spherical_mode = true;
   Camera zoom_to_fit_cam;
 
   Controls();
