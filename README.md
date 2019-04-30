@@ -70,7 +70,7 @@ The heat propagation method is an improvement, but it's still disappointing. The
 
 ## Sources
 
-The OpenGL SuperBible has a nice chapter on how to make a mass-spring system using transform feedback. I referring to the example code that accompanies the book, here:
+The OpenGL SuperBible has a nice chapter on how to make a mass-spring system using transform feedback. I referred to the example code that accompanies the book, here:
 
 https://github.com/openglsuperbible/sb7code
 
