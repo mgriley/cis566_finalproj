@@ -1,4 +1,4 @@
-render_mode comps 1 min 0.0 max 3.0 speed 0.1 default 2.0
+render_mode comps 1 min 0.0 max 3.0 speed 0.1 default 3.0
 point_size comps 1 min 0.0 max 10.0 speed 0.1 default 5.0
 END_USER_UNIFS
 

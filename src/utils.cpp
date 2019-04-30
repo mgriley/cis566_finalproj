@@ -1,5 +1,43 @@
 #include "utils.h"
 
+const char* INSTRUCTIONS_STRING = R"--(
+quickstart:
+Drag the "iter num" slider to see the mesh update in real-time.
+
+camera:
+WASDEQ to move
+F to switch between cartesian and spherical movement
+R to reset to original position
+
+general:
+P: reload programs (check stdout for errors)
+C: run simulation once (can also be done via the button)
+
+render program controls:
+render_mode:
+0: boring solid color
+1: color by heat
+2: color by heat generation amt
+3: highlight source nodes
+
+morph program controls:
+You'll need to consult shaders/growth.glsl for the particular usage
+of each uniform. The names are generally sensible.
+
+simulation pane:
+Running once runs the simulation for the desired number of frames, and
+the result is rendered. The initial data is a grid of AxA vertices. Many
+of the morph program tunable parameters default to values that work well
+with about 100x100.
+
+animation pane:
+The app starts with the animation playing, but with a speed of 0. This regenerates
+the mesh every frame but does not change the iteration num automatically.
+To run the simulation forwards or backwards, change the "delta iters per frame" to +/-1.
+While animating, the app runs "iter num" iterations every frame, so it may be slow.
+
+)--";
+
 void handle_segfault(int sig_num) {
   array<void*, 15> frames{};
   int num_frames = backtrace(frames.data(), frames.size());

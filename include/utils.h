@@ -31,3 +31,4 @@ void log_gl_errors(string msg);
 void log_program_info_logs(string msg, GLuint program);
 void log_shader_info_logs(string msg, GLuint shader);
 
+extern const char* INSTRUCTIONS_STRING;

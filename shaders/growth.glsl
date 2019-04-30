@@ -145,21 +145,6 @@ float compute_next_heat() {
   return pos.w - total_heat_out + total_heat_in;
 }
 
-// TODO - unused
-// Not actually the gradient, but same idea 
-vec3 heat_gradient() {
-  vec3 avg_delta_heat = vec3(0.0);
-  for (int i = 0; i < 4; ++i) {
-    int n_index = int(neighbors[i]);
-    if (n_index != -1) {
-      vec4 n_pos = texelFetch(pos_buf, n_index);
-      avg_delta_heat += normalize(n_pos.xyz - pos.xyz) * (n_pos.w - pos.w);
-    }
-  }
-  avg_delta_heat *= 0.25;
-  return avg_delta_heat;
-}
-
 vec3 node_normal(vec3 node_pos, vec4 node_neighbors) {
   vec3 nor = vec3(0.0,1.0,0.0);
   for (int i = 0; i < 4; ++i) {
@@ -240,9 +225,7 @@ void compute_source_transition(out vec4 out_vel, out vec4 out_data) {
 
     // clone if right conditions
     bool is_cloning = false;
-    // TODO
     if (iter_num % int(cloning_interval.x) == 0) {
-    //if (trans_noise.x < src_trans_probs.x) {
       // turn on the request
       // Note that we encode the gen_amt as the vector len.
       // This only works b/c the gen_amt is strictly positive!
@@ -315,6 +298,8 @@ vec3 compute_next_pos() {
   } else {
     force += force_coeffs.z * delta_heat;
   }
+  // anneal if low heat (eh, this did not work out)
+  //force *= clamp(pos.w, 0.0, 1.0);
 
   vec3 p_next = pos.xyz + force; 
 
@@ -349,38 +334,3 @@ void main() {
   }
 }
 
-/*
-vec3 compute_next_pos_old() {
-
-  bool is_fixed = false;
-  vec3 force = vec3(0.0);
-  vec3 avg_delta_heat = vec3(0.0);
-  for (int i = 0; i < 4; ++i) {
-    int n_i = int(neighbors[i]);
-    if (n_i != -1) {
-      vec4 n_pos = texelFetch(pos_buf, n_i);
-      vec3 delta = n_pos.xyz - pos.xyz;
-      float spring_len = length(delta);
-      force += force_coeffs.x * normalize(delta) *
-        (spring_len - target_spring_len.x);
-      avg_delta_heat += normalize(n_pos.xyz - pos.xyz) * (n_pos.w - pos.w);
-    } else {
-      is_fixed = true;
-    }
-  }
-  avg_delta_heat *= 0.25;
-
-  if (vel.w != 0.0) {
-    force += force_coeffs.y * vel.xyz;
-  } else {
-    force += force_coeffs.z * avg_delta_heat;
-  }
-
-  vec3 p_next = pos.xyz + force; 
-
-  if (is_fixed) {
-    p_next = pos.xyz;
-  }
-  return p_next;
-}
-*/

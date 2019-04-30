@@ -464,18 +464,6 @@ void gen_morph_data(ivec2 samples, vector<MorphNode>& out_nodes, vector<GLuint>&
   out_indices = std::move(indices);
 }
 
-// TODO - no longer right sig
-vector<MorphNode> gen_sample_square() {
-  vector<MorphNode> nodes = {
-    MorphNode(vec4(-0.5,-0.5,0.0,0.0), vec4(0.0), vec4(ivec4(3,-1,1,-1)), vec4(0.0)),
-    MorphNode(vec4(0.5,-0.5,0.0,0.0), vec4(0.0), vec4(ivec4(2,-1,-1,0)), vec4(0.0)),
-    MorphNode(vec4(0.5,0.5,0.0,0.0), vec4(0.0), vec4(ivec4(0,1,-1,3)), vec4(0.0)),
-    MorphNode(vec4(-0.5,0.5,0.0,0.0), vec4(0.0), vec4(ivec4(-1,0,2,-1)), vec4(0.0)),
-    MorphNode(vec4(0.0), vec4(0.0), vec4(ivec4(0, 1, 2, 3)), vec4(0.0))
-  };
-  return nodes;
-}
-
 void set_initial_sim_data(GraphicsState& g_state) {
   log_gl_errors("start set_initial_sim_data");
 
@@ -485,7 +473,6 @@ void set_initial_sim_data(GraphicsState& g_state) {
   vector<MorphNode> nodes;
   vector<GLuint> indices;
   gen_morph_data(zygote_samples, nodes, indices);
-  //vector<MorphNode> nodes = gen_sample_square();
   MorphNodes node_vecs(nodes);
   write_index_data(g_state, indices);
 
@@ -587,26 +574,6 @@ void run_simulation_pipeline(GraphicsState& g_state) {
   log_gl_errors("ending sim pipeline\n");
 }
 
-// TODO - remove
-/*
-void set_sample_render_data(RenderState& r_state) {
-  vector<Vertex> vertices = {
-    {vec3(0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0), vec4(0.0)},
-    {vec3(1.0,0.0,0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0), vec4(0.0)},
-    {vec3(1.0,1.0,0.0), vec3(0.0,0.0,-1.0), vec4(1.0,0.0,0.0,1.0), vec4(0.0)}
-  };
-  vector<GLuint> indices = {
-    0, 1, 2
-  };
-  glBindBuffer(GL_ARRAY_BUFFER, r_state.vbo);
-  glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(Vertex), vertices.data());
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
-  glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, indices.size() * sizeof(GLuint), indices.data());
-  r_state.vertex_count = vertices.size();
-  r_state.elem_count = indices.size();
-}
-*/
-
 void render_frame(GraphicsState& g_state) {
   RenderState& r_state = g_state.render_state;
   MorphState& m_state = g_state.morph_state;
@@ -626,7 +593,6 @@ void render_frame(GraphicsState& g_state) {
     glUniform4fv(user_unif.gl_handle, 1, &user_unif.cur_val[0]);
   }
 
-  //set_sample_render_data(r_state);
   MorphBuffer& target_buf = m_state.buffers[m_state.result_buffer_index];
   glBindVertexArray(target_buf.vao);
 
@@ -700,11 +666,12 @@ void update_camera_cartesian(GLFWwindow* win, Controls& controls, Camera& cam) {
   if (glfwGetKey(win, GLFW_KEY_E)) {
     delta += vec3(0.0,1.0,0.0);
   }
-  vec3 trans = delta * 20.0f * 0.017f;
+  float delta_secs = 1.0f / controls.target_fps;
+  vec3 trans = delta * 20.0f * delta_secs;
   mat4 trans_mat = glm::translate(mat4(1.0), trans);
 
   mat4 rot_mat(1.0);
-  float amt_degs = 0.017f * 5.0f;
+  float amt_degs = delta_secs * 5.0f;
   if (glfwGetKey(win, GLFW_KEY_LEFT)) {
     rot_mat = glm::rotate(mat4(1.0), amt_degs, vec3(0.0,1.0,0.0));
   } else if (glfwGetKey(win, GLFW_KEY_RIGHT)) {
@@ -745,9 +712,10 @@ void update_camera_spherical(GLFWwindow* win, Controls& controls, Camera& cam) {
   if (glfwGetKey(win, GLFW_KEY_E)) {
     delta_v_angle = -1.0;
   }
-  float new_r = cur_r + 30.0f * delta_r * 0.017;
-  float new_h_angle = h_angle + M_PI / 2.0 * delta_h_angle * 0.017;
-  float new_v_angle = v_angle + M_PI / 2.0 * delta_v_angle * 0.017;
+  float delta_secs = 1.0f / controls.target_fps;
+  float new_r = cur_r + 30.0f * delta_r * delta_secs;
+  float new_h_angle = h_angle + M_PI / 2.0 * delta_h_angle * delta_secs;
+  float new_v_angle = v_angle + M_PI / 2.0 * delta_v_angle * delta_secs;
 
   vec3 pos = new_r * vec3(
       cos(new_h_angle) * sin(new_v_angle),
@@ -900,7 +868,6 @@ void run_app(int argc, char** argv) {
     }
     ImGui::Combo("program", &m_state.cur_prog_index,
         prog_names.data(), prog_names.size());
-      //ImGui::DragFloat4(user_unif.name.c_str(), &user_unif.cur_val[0]);
 
     MorphProgram& cur_prog = m_state.programs[m_state.cur_prog_index];
     ImGui::PushID("morph");
@@ -909,7 +876,7 @@ void run_app(int argc, char** argv) {
     
     ImGui::Separator();
     ImGui::Text("simulation controls:");
-    ImGui::Text("seed:");
+    ImGui::Text("init data:");
     ImGui::InputInt("AxA samples", &controls.num_zygote_samples);
     controls.num_zygote_samples = std::max(controls.num_zygote_samples, 0);
     
@@ -954,6 +921,10 @@ void run_app(int argc, char** argv) {
       controls.log_render_data = false;
       controls.log_durations = false;
     }
+
+    ImGui::Separator();
+    ImGui::Text("instructions:");
+    ImGui::Text("%s", INSTRUCTIONS_STRING);
 
     ImGui::End();
 
