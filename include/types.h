@@ -138,6 +138,7 @@ struct Controls {
   bool log_input_nodes = false;
   bool log_output_nodes = false;
   bool log_render_data = false;
+  bool log_durations = false;
   int num_zygote_samples = 100;
   // for the simulation/animation pane
   int num_iters = 0;

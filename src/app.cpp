@@ -321,6 +321,7 @@ void init_render_state(GraphicsState& g_state) {
   load_render_program(g_state);
 
   glEnable(GL_DEPTH_TEST);
+  glEnable(GL_PROGRAM_POINT_SIZE);
   
   glGenBuffers(1, &r_state.index_buffer);
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, r_state.index_buffer);
@@ -561,9 +562,22 @@ void run_simulation(GraphicsState& g_state, int num_iters) {
 void run_simulation_pipeline(GraphicsState& g_state) {
   log_gl_errors("starting sim pipeline\n");
 
+  auto start_init_data = chrono::steady_clock::now();
   set_initial_sim_data(g_state);
-  run_simulation(g_state, g_state.controls.num_iters);
+  auto end_init_data = chrono::steady_clock::now();
+  auto init_data_duration =
+    chrono::duration_cast<chrono::milliseconds>(end_init_data - start_init_data);
 
+  auto start_sim = chrono::steady_clock::now();
+  run_simulation(g_state, g_state.controls.num_iters);
+  auto end_sim = chrono::steady_clock::now();
+  auto sim_duration =
+    chrono::duration_cast<chrono::milliseconds>(end_sim - start_sim);
+
+  if (g_state.controls.log_durations) {
+    printf("init data: %dms\nsim: %dms\n",
+        (int) init_data_duration.count(), (int) sim_duration.count());
+  }
   if (g_state.controls.log_output_nodes) {
     MorphNodes node_vecs = read_nodes_from_vbos(g_state.morph_state);
     printf("output nodes:\n");
@@ -615,7 +629,6 @@ void render_frame(GraphicsState& g_state) {
   //set_sample_render_data(r_state);
   MorphBuffer& target_buf = m_state.buffers[m_state.result_buffer_index];
   glBindVertexArray(target_buf.vao);
-  glPointSize(10.0f);
 
   // bind texture buffers
   for (int i = 0; i < MORPH_BUF_COUNT; ++i) {
@@ -933,11 +946,13 @@ void run_app(int argc, char** argv) {
     ImGui::Checkbox("log input nodes", &controls.log_input_nodes);
     ImGui::Checkbox("log output nodes", &controls.log_output_nodes);
     ImGui::Checkbox("log render data", &controls.log_render_data);
+    ImGui::Checkbox("log durations", &controls.log_durations);
     // do not log while animating, the IO becomes a bottleneck
     if (controls.animating_sim) {
       controls.log_input_nodes = false;
       controls.log_output_nodes = false;
       controls.log_render_data = false;
+      controls.log_durations = false;
     }
 
     ImGui::End();

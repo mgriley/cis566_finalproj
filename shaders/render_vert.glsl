@@ -1,6 +1,5 @@
-foo comps 1 min 0.0 max 1.0 speed 0.01 default 1.0
-baz comps 1 min 0.0 max 1.0 speed 0.01 default 3.0
-render_mode comps 1 min 0.0 max 3.0 speed 0.1 default 0.0
+render_mode comps 1 min 0.0 max 3.0 speed 0.1 default 2.0
+point_size comps 1 min 0.0 max 10.0 speed 0.1 default 5.0
 END_USER_UNIFS
 
 #version 410
@@ -9,6 +8,7 @@ uniform mat4 mv_matrix;
 uniform mat4 proj_matrix;
 
 uniform vec4 render_mode;
+uniform vec4 point_size;
 
 layout (location = 0) in vec4 vs_pos;
 layout (location = 1) in vec4 vs_vel;
@@ -70,5 +70,6 @@ void main() {
   fs_nor = nor;
   fs_col = col;
   gl_Position = proj_matrix * mv_matrix * vec4(vs_pos.xyz, 1.0);
+  gl_PointSize = point_size.x;
 }
 

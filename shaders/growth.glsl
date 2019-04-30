@@ -1,13 +1,14 @@
 fix_positions comps 1 min 0.0 max 1.0 speed 1.0 default 0.0
 norm_src_pos comps 1 min 0.0 max 1.0 speed 0.001 default 0.5
 init_src_dir comps 3 min -1.0 max 1.0 speed 0.001 default 0.0 1.0 0.0
-src_heat_gen_rate comps 1 min 0.0 max 10.0 speed 0.01 default 4.0
+src_heat_gen_rate comps 1 min 0.0 max 100.0 speed 0.01 default 10.0
 heat_transfer_coeff comps 1 min 0.0 max 1.0 speed 0.001 default 0.2
-target_spring_len comps 1 min 0.0 max 3.0 speed 0.01 default 0.5
-force_coeffs comps 3 min 0.0 max 3.0 speed 0.01 default 0.2 0.25 0.5
-src_creation_prob comps 1 min 0.0 max 1.0 speed 0.001 default 0.01
-src_trans_probs comps 2 min 0.0 max 1.0 speed 0.001 default 0.05 0.3
-cloning_coeffs comps 2 min 0.0 max 1.0 speed 0.005 default 1.0 1.0
+target_spring_len comps 1 min 0.0 max 3.0 speed 0.01 default 0.1
+spring_coeffs comps 2 min 0.0 max 1.0 speed 0.01 default 0.05 0.1
+force_coeffs comps 3 min 0.0 max 3.0 speed 0.01 default 0.0 0.25 0.25
+src_trans_probs comps 3 min 0.0 max 1.0 speed 0.001 default 0.05 0.45 0.0
+cloning_coeffs comps 3 min 0.0 max 1.0 speed 0.005 default 1.0 1.0 0.5
+cloning_interval comps 1 min 0.0 max 600.0 speed 0.1 default 40.0
 END_USER_UNIFS
 
 #version 410
@@ -22,10 +23,11 @@ uniform vec4 fix_positions;
 uniform vec4 src_heat_gen_rate;
 uniform vec4 heat_transfer_coeff;
 uniform vec4 target_spring_len;
+uniform vec4 spring_coeffs;
 uniform vec4 force_coeffs;
-uniform vec4 src_creation_prob;
 uniform vec4 src_trans_probs;
 uniform vec4 cloning_coeffs;
+uniform vec4 cloning_interval;
 
 // use explicit locations so that these attributes in 
 // different programs explicitly use the same attribute indices
@@ -208,8 +210,11 @@ int directed_neighbor(vec3 node_pos, vec4 node_neighbors, vec3 target_dir) {
 void compute_source_transition(out vec4 out_vel, out vec4 out_data) {
   vec4 next_vel = vel;
   vec4 next_data = vec4(-1.0);
+
+  vec3 trans_noise = hash3(pos.xyz * iter_num);
   if (vel.w == 0.0) {
     // check if a neighbor has requested to be cloned
+    bool did_promote = false;
     for (int i = 0; i < 4; ++i) {
       int n_index = int(neighbors[i]);
       if (n_index != -1) {
@@ -219,29 +224,33 @@ void compute_source_transition(out vec4 out_vel, out vec4 out_data) {
           float gen_amt = length(n_data.xyz);
           next_vel = vec4(normalize(n_data.xyz), gen_amt);
           next_data = vec4(-1.0);
+          did_promote = true;
         }
       }
     }
 
-    // TODO - perhaps promote to a src with some probabilty. curious if this gives decent results
-    
+    // promote this node to a src with some probability
+    if (!did_promote && trans_noise.z < src_trans_probs.z) {
+      vec3 nor = node_normal(pos.xyz, neighbors);
+      next_vel = vec4(nor, src_heat_gen_rate.x);
+      next_data = vec4(-1.0);
+    }
   } else {
-    // this is a current src
+    // this node is currently a source
 
     // clone if right conditions
-    vec3 trans_noise = hash3(pos.xyz * iter_num);
     bool is_cloning = false;
     // TODO
-    if (iter_num % 31 == 0) {
+    if (iter_num % int(cloning_interval.x) == 0) {
     //if (trans_noise.x < src_trans_probs.x) {
       // turn on the request
       // Note that we encode the gen_amt as the vector len.
       // This only works b/c the gen_amt is strictly positive!
-      // TODO - improve this later
       
       // create two new vecs mirrored across the current vec
-      // TODO - can make some variable angle apart
-      vec3 tangent_vec = normalize(cross(vel.xyz, trans_noise));
+      // pi * cloning_coeffs.z is the desired angle b/w the two vecs
+      float tangent_len = tan(0.5 * pi * cloning_coeffs.z);
+      vec3 tangent_vec = tangent_len * normalize(cross(vel.xyz, trans_noise));
       vec3 my_dir = normalize(vel.xyz - tangent_vec);
       vec3 clone_dir = normalize(vel.xyz + tangent_vec);
 
@@ -279,26 +288,32 @@ vec3 compute_next_pos() {
 
   bool is_fixed = false;
   vec3 force = vec3(0.0);
-  vec3 avg_delta_heat = vec3(0.0);
+  vec3 delta_heat = vec3(0.0);
+  float largest_delta = 0.0;
   for (int i = 0; i < 4; ++i) {
     int n_i = int(neighbors[i]);
     if (n_i != -1) {
       vec4 n_pos = texelFetch(pos_buf, n_i);
-      vec3 delta = n_pos.xyz - pos.xyz;
-      float spring_len = length(delta);
-      force += force_coeffs.x * normalize(delta) *
+      vec3 delta_pos = n_pos.xyz - pos.xyz;
+      float spring_len = length(delta_pos);
+      float spring_factor = spring_len < target_spring_len.x ?
+        spring_coeffs.x : spring_coeffs.y;
+      force += spring_factor * normalize(delta_pos) *
         (spring_len - target_spring_len.x);
-      avg_delta_heat += normalize(n_pos.xyz - pos.xyz) * (n_pos.w - pos.w);
+
+      if (n_pos.w - pos.w > largest_delta) {
+        delta_heat = normalize(n_pos.xyz - pos.xyz);      
+        largest_delta = n_pos.w - pos.w;
+      }
     } else {
       is_fixed = true;
     }
   }
-  avg_delta_heat *= 0.25;
 
   if (vel.w != 0.0) {
     force += force_coeffs.y * vel.xyz;
   } else {
-    force += force_coeffs.z * avg_delta_heat;
+    force += force_coeffs.z * delta_heat;
   }
 
   vec3 p_next = pos.xyz + force; 
@@ -334,23 +349,38 @@ void main() {
   }
 }
 
-// TODO - randomly choose nodes for new addition as a src
-// This becomes very unruly, sadly
-// Returns data, and outputs the heat gen amt
 /*
-vec4 compute_source_transition_old(out float out_heat_gen_amt) {
-  float gen_amt = vel.w;
-  vec3 gen_dir = data.xyz;
-  if (vel.w == 0.0) {
-    vec3 noise = hash3(pos.xyz);
-    if (noise.x < src_creation_prob.x) {
-      gen_amt = noise.y * src_heat_gen_rate.x;
-      gen_dir = node_normal(pos.xyz, neighbors);
+vec3 compute_next_pos_old() {
+
+  bool is_fixed = false;
+  vec3 force = vec3(0.0);
+  vec3 avg_delta_heat = vec3(0.0);
+  for (int i = 0; i < 4; ++i) {
+    int n_i = int(neighbors[i]);
+    if (n_i != -1) {
+      vec4 n_pos = texelFetch(pos_buf, n_i);
+      vec3 delta = n_pos.xyz - pos.xyz;
+      float spring_len = length(delta);
+      force += force_coeffs.x * normalize(delta) *
+        (spring_len - target_spring_len.x);
+      avg_delta_heat += normalize(n_pos.xyz - pos.xyz) * (n_pos.w - pos.w);
+    } else {
+      is_fixed = true;
     }
   }
-  out_heat_gen_amt = gen_amt;
-  return vec4(gen_dir, 0.0);
+  avg_delta_heat *= 0.25;
+
+  if (vel.w != 0.0) {
+    force += force_coeffs.y * vel.xyz;
+  } else {
+    force += force_coeffs.z * avg_delta_heat;
+  }
+
+  vec3 p_next = pos.xyz + force; 
+
+  if (is_fixed) {
+    p_next = pos.xyz;
+  }
+  return p_next;
 }
 */
-
-
